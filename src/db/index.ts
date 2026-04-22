@@ -29,7 +29,8 @@ export const schema = {
         content TEXT,
         tags TEXT,
         source_url TEXT,
-        verification_state TEXT DEFAULT 'unverified',
+        verification_state TEXT DEFAULT 'unverified'
+          CHECK (verification_state IN ('unverified','self_checked','source_checked','accepted','rejected')),
         verification_reasoning TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -43,11 +44,13 @@ export const schema = {
         model_id TEXT NOT NULL,
         prompt TEXT NOT NULL,
         response TEXT,
-        status TEXT DEFAULT 'queued',
+        status TEXT DEFAULT 'queued'
+          CHECK (status IN ('queued','running','completed','failed')),
         tokens_input INTEGER,
         tokens_output INTEGER,
         latency_ms INTEGER,
-        verification_state TEXT DEFAULT 'unverified',
+        verification_state TEXT DEFAULT 'unverified'
+          CHECK (verification_state IN ('unverified','self_checked','source_checked','accepted','rejected')),
         verification_reasoning TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (session_id) REFERENCES research_sessions(id) ON DELETE SET NULL
@@ -62,7 +65,8 @@ export const schema = {
         roi_score REAL DEFAULT 0,
         lane TEXT DEFAULT 'general',
         status TEXT DEFAULT 'todo',
-        verification_state TEXT DEFAULT 'unverified',
+        verification_state TEXT DEFAULT 'unverified'
+          CHECK (verification_state IN ('unverified','self_checked','source_checked','accepted','rejected')),
         verification_reasoning TEXT,
         due_at DATETIME,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -77,7 +81,8 @@ export const schema = {
         currency TEXT DEFAULT 'USD',
         source TEXT NOT NULL,
         description TEXT,
-        verification_state TEXT DEFAULT 'unverified',
+        verification_state TEXT DEFAULT 'unverified'
+          CHECK (verification_state IN ('unverified','self_checked','source_checked','accepted','rejected')),
         occurred_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       );

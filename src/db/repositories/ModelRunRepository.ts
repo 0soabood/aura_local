@@ -1,5 +1,5 @@
 import db from '../connection';
-import { ModelRun } from '../../shared/types';
+import { ModelRun, assertVerificationState } from '../../shared/types';
 
 export const ModelRunRepository = {
   create: (run: Partial<ModelRun> & { id: string; model_id: string; prompt: string }) => {
@@ -15,12 +15,15 @@ export const ModelRunRepository = {
   },
 
   update: (id: string, updates: Partial<ModelRun>) => {
+    if (updates.verification_state !== undefined) {
+      assertVerificationState(updates.verification_state);
+    }
     const keys = Object.keys(updates).filter(k => k !== 'id');
     if (keys.length === 0) return;
-    
+
     const setClause = keys.map(k => `${k} = ?`).join(', ');
     const values = keys.map(k => (updates as any)[k]);
-    
+
     db.prepare(`UPDATE model_runs SET ${setClause} WHERE id = ?`)
       .run(...values, id);
   }

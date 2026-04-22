@@ -1,5 +1,5 @@
 import db from '../connection';
-import { RoadmapItem, WorkflowStatus } from '../../shared/types';
+import { RoadmapItem, WorkflowStatus, assertVerificationState } from '../../shared/types';
 
 export interface IRoadmapRepository {
   create(item: Partial<RoadmapItem> & { id: string; title: string }): void;
@@ -34,12 +34,15 @@ export const RoadmapRepository: IRoadmapRepository = {
   },
 
   update: (id, updates) => {
+    if (updates.verification_state !== undefined) {
+      assertVerificationState(updates.verification_state);
+    }
     const keys = Object.keys(updates).filter(k => k !== 'id');
     if (keys.length === 0) return;
-    
+
     const setClause = keys.map(k => `${k} = ?`).join(', ');
     const values = keys.map(k => (updates as any)[k]);
-    
+
     db.prepare(`UPDATE roadmap_items SET ${setClause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
       .run(...values, id);
   },

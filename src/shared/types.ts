@@ -2,12 +2,50 @@
  * AURA_LOCAL_SYNC Shared Type Definitions
  */
 
-export type VerificationState = 
-  | 'unverified' 
-  | 'self_checked' 
-  | 'source_checked' 
-  | 'accepted' 
-  | 'rejected';
+// Source-of-truth verification taxonomy for all domain records.
+export const VERIFICATION_STATES = [
+  'unverified',
+  'self_checked',
+  'source_checked',
+  'accepted',
+  'rejected',
+] as const;
+
+export type VerificationState = (typeof VERIFICATION_STATES)[number];
+
+// States that count as trusted for telemetry health calculations.
+export const VERIFIED_VERIFICATION_STATES: readonly VerificationState[] = [
+  'accepted',
+  'source_checked',
+];
+
+// Runtime guard. Use at any boundary that accepts a verification_state from
+// untrusted input (HTTP body, partial update payload, etc.). Throws on drift.
+export function isVerificationState(value: unknown): value is VerificationState {
+  return typeof value === 'string'
+    && (VERIFICATION_STATES as readonly string[]).includes(value);
+}
+
+export function assertVerificationState(value: unknown): VerificationState {
+  if (!isVerificationState(value)) {
+    throw new Error(
+      `Invalid verification_state: ${JSON.stringify(value)}. ` +
+      `Allowed: ${VERIFICATION_STATES.join(', ')}`
+    );
+  }
+  return value;
+}
+
+// Canonical telemetry formulas; repositories should implement these definitions exactly.
+export const TELEMETRY_FORMULAS = {
+  totalValueSignal: "SUM(roadmap_items.roi_score WHERE status = 'done')",
+  tasksCompleted: "COUNT(roadmap_items WHERE status = 'done')",
+  activeProposals: "COUNT(roadmap_items WHERE status != 'done')",
+  executionVelocity: "COUNT(roadmap_items WHERE status = 'done' AND updated_at in last 7 days)",
+  researchDensity: 'COUNT(research_snippets)',
+  systemHealth: 'ROUND((trusted_snippets / total_snippets) * 100) where trusted_snippets = accepted OR source_checked',
+  recentActivity: 'COUNT(system_logs) GROUP BY date(created_at) for last 7 days',
+} as const;
 
 export type WorkflowStatus = 'backlog' | 'todo' | 'in_progress' | 'done' | 'archived';
 
@@ -45,7 +83,9 @@ export interface ModelRun {
   model_id: string;
   prompt: string;
   response?: string;
-  status: 'queued' | 'running' | 'completed' | 'failed' | 'verified';
+  // Lifecycle of the model run itself. Trust/verification is tracked
+  // separately on `verification_state` — do not conflate the two.
+  status: 'queued' | 'running' | 'completed' | 'failed';
   tokens_input?: number;
   tokens_output?: number;
   latency_ms?: number;

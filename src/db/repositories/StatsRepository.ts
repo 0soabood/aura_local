@@ -1,9 +1,9 @@
 import db from '../connection';
-import { TelemetryMetrics } from '../../shared/types';
+import { TelemetryMetrics, VERIFIED_VERIFICATION_STATES } from '../../shared/types';
 
 export const StatsRepository = {
   getMetrics: (): TelemetryMetrics => {
-    // 1. Value Signal (Sum of Done ROI Scores)
+    // 1. Value Signal: SUM(roadmap_items.roi_score WHERE status = 'done')
     const valueSignal = db.prepare("SELECT SUM(roi_score) as total FROM roadmap_items WHERE status = 'done'").get() as any;
     
     // 2. Task Stats
@@ -21,8 +21,11 @@ export const StatsRepository = {
       AND updated_at >= date('now', '-7 days')
     `).get() as any;
 
-    // 5. System Health (Verification Ratio)
-    const verified = db.prepare("SELECT COUNT(*) as count FROM research_snippets WHERE verification_state = 'verified'").get() as any;
+    // 5. System Health: trusted snippets / total snippets
+    const placeholders = VERIFIED_VERIFICATION_STATES.map(() => '?').join(', ');
+    const verified = db
+      .prepare(`SELECT COUNT(*) as count FROM research_snippets WHERE verification_state IN (${placeholders})`)
+      .get(...VERIFIED_VERIFICATION_STATES) as any;
     const totalRecords = db.prepare("SELECT COUNT(*) as count FROM research_snippets").get() as any;
     const health = totalRecords.count > 0 ? (verified.count / totalRecords.count) * 100 : 100;
 

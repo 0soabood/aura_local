@@ -1,14 +1,9 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import Database from 'better-sqlite3';
+import { describe, it, expect } from 'vitest';
 import { RoadmapRepository } from './RoadmapRepository';
-import db from '../connection';
+
+// Schema migration + per-test table wipe come from tests/setup.ts.
 
 describe('RoadmapRepository', () => {
-  beforeEach(() => {
-    // Reset database state for tests
-    db.prepare('DELETE FROM roadmap_items').run();
-  });
-
   it('should create and list roadmap items sorted by priority and ROI', () => {
     RoadmapRepository.create({
       id: 'item-1',

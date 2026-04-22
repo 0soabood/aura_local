@@ -1,5 +1,5 @@
 import db from '../connection';
-import { ResearchSnippet } from '../../shared/types';
+import { ResearchSnippet, assertVerificationState } from '../../shared/types';
 
 export const SnippetRepository = {
   findAll: (): ResearchSnippet[] => {
@@ -22,6 +22,9 @@ export const SnippetRepository = {
   },
 
   update: (id: string, updates: Partial<ResearchSnippet>) => {
+    if (updates.verification_state !== undefined) {
+      assertVerificationState(updates.verification_state);
+    }
     const keys = Object.keys(updates).filter(k => k !== 'id');
     if (keys.length === 0) return;
     const setClause = keys.map(k => `${k} = ?`).join(', ');
