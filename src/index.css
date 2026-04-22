@@ -1,0 +1,62 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-aura-bg: #0C0D0E;
+  --color-aura-panel: #121417;
+  --color-aura-border: #1E2126;
+  --color-aura-accent: #3b82f6;
+  --color-aura-success: #10b981;
+  --color-aura-warn: #f59e0b;
+}
+
+@layer base {
+  body {
+    @apply bg-aura-bg text-zinc-400 antialiased selection:bg-aura-accent/30 selection:text-white overflow-hidden;
+  }
+}
+
+@layer components {
+  .aura-panel {
+    @apply bg-aura-panel border border-aura-border;
+  }
+
+  .aura-title-bar {
+    @apply bg-aura-border/20 border-b border-aura-border px-3 py-1.5 flex items-center justify-between;
+  }
+
+  .aura-scroll-y {
+    @apply overflow-y-auto;
+  }
+}
+
+/* Custom Scrollbar Styles */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1E2126;
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #272B33;
+}
+
+/* Custom terminal styling */
+.terminal-line {
+  @apply py-0.5 border-l-2 border-transparent hover:border-aura-accent/50 hover:bg-aura-accent/5 transition-all px-4;
+}
+
+.operator-label {
+  @apply text-[10px] font-bold uppercase tracking-widest text-zinc-600;
+}

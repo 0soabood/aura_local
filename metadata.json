@@ -1,0 +1,6 @@
+{
+  "name": "AURA_LOCAL_SYNC",
+  "description": "Local-first AI research and execution console for personal productivity.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
