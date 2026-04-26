@@ -126,7 +126,58 @@ export const aura: AuraAPI = {
     } catch {
       return false;
     }
-  }
+  },
+
+  // v2: Supervisor routing (legacy)
+  routeSupervisor: async (task) => {
+    const res = await fetch('/api/supervisor/route', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(task),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error ?? 'Supervisor route failed');
+    }
+    return res.json();
+  },
+
+  // v3: Reactive orchestrator
+  orchestrate: async (message, sessionId) => {
+    const res = await fetch('/api/orchestrate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, sessionId }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error ?? 'Orchestration failed');
+    }
+    return res.json();
+  },
+
+  // v3: Session management
+  createSession: async () => {
+    const res = await fetch('/api/sessions', { method: 'POST' });
+    if (!res.ok) throw new Error('Failed to create session');
+    return res.json();
+  },
+
+  listSessions: async () => {
+    const res = await fetch('/api/sessions');
+    if (!res.ok) return [];
+    return res.json();
+  },
+
+  getSessionEvents: async (sessionId) => {
+    const res = await fetch(`/api/sessions/${sessionId}/events`);
+    if (!res.ok) return [];
+    return res.json();
+  },
+
+  deleteSession: async (sessionId) => {
+    await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
+  },
 };
 
 // Expose to window for the renderer

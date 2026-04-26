@@ -1,106 +1,76 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
-import React, { useState } from 'react';
-import { 
-  Database, 
-  BookOpen, 
-  Hash, 
-  Activity, 
-  Settings, 
-  LogOut,
-  Terminal
-} from 'lucide-react';
-import ResearchConsole from './components/ResearchConsole';
-import SystemLogs from './components/SystemLogs';
-import RoadmapView from './components/RoadmapView';
-import ROIDash from './components/ROIDash';
+import { useState, useEffect, useMemo } from 'react';
+import { Component, ErrorInfo, ReactNode } from 'react';
+import { Terminal, Activity, Search, Layers, FileText, Cpu } from 'lucide-react';
 import CoreTerminal from './components/CoreTerminal';
 
-type View = 'terminal' | 'research' | 'logs' | 'roadmap' | 'stats' | 'settings';
+// ── Error boundary ────────────────────────────────────────────────────────────
+
+interface ErrorBoundaryState { hasError: boolean; message: string }
+
+class RootErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryState> {
+  state: ErrorBoundaryState = { hasError: false, message: '' };
+
+  static getDerivedStateFromError(err: Error): ErrorBoundaryState {
+    return { hasError: true, message: err.message };
+  }
+
+  componentDidCatch(err: Error, info: ErrorInfo) {
+    console.error('[RootErrorBoundary]', err, info);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="h-full flex flex-col items-center justify-center bg-panel gap-4 p-12 text-center">
+          <span className="text-[10px] font-bold text-red-500 uppercase tracking-[0.2em]">Console Crashed</span>
+          <p className="text-[10px] text-dim font-mono max-w-md leading-relaxed">{this.state.message}</p>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+// ── App ───────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [currentView, setCurrentView] = useState<View>('terminal');
-
-  const navItems = [
-    { id: 'terminal', icon: Terminal, label: 'Core Shell' },
-    { id: 'research', icon: BookOpen, label: 'Research' },
-    { id: 'logs', icon: Terminal, label: 'System Logs' },
-    { id: 'roadmap', icon: Hash, label: 'Roadmap' },
-    { id: 'stats', icon: Activity, label: 'ROI' },
-    { id: 'settings', icon: Settings, label: 'Settings' },
-  ] as const;
+  const [apiOnline, setApiOnline] = useState(true);
 
   return (
-    <div className="flex h-screen w-full bg-aura-bg text-zinc-400 font-sans overflow-hidden">
-      {/* Primary Vertical Rail */}
-      <nav className="w-12 flex flex-col items-center py-4 border-r border-aura-border bg-aura-panel flex-shrink-0">
-        <div className="w-8 h-8 bg-aura-accent/20 border border-aura-accent/50 rounded-sm flex items-center justify-center mb-10">
-          <Database className="text-aura-accent" size={16} />
+    <div className="app density-compact" style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
+      {/* HEADER */}
+      <header className="app-header" style={{ flexShrink: 0 }}>
+        <div className="app-header-title">
+          <span className="dot live" />
+          <b>AURA Shell</b>
+          <span className="sep">·</span>
+          <span className="sub">Minimal Autonomous Client</span>
         </div>
-        
-        <div className="flex flex-col gap-8 flex-1">
-          {navItems.map((item) => (
-            <button 
-              key={item.id}
-              onClick={() => setCurrentView(item.id)}
-              className={`p-2 transition-all duration-200 group relative ${
-                currentView === item.id ? 'text-aura-accent' : 'text-zinc-700 hover:text-zinc-500'
-              }`}
-              title={item.label}
-            >
-              <item.icon size={18} strokeWidth={currentView === item.id ? 2.5 : 2} />
-              {currentView === item.id && (
-                <div className="absolute left-[-1rem] top-1/2 -translate-y-1/2 w-0.5 h-6 bg-aura-accent shadow-[0_0_8px_#3b82f6]" />
-              )}
-            </button>
-          ))}
+        <div className="app-header-meta">
+          <span className="ver">v1.0.0</span>
         </div>
+      </header>
 
-        <button className="mt-auto text-zinc-800 hover:text-red-500 transition-colors p-2">
-          <LogOut size={18} />
-        </button>
-      </nav>
-
-      {/* Main Orchestration Pane */}
-      <main className="flex-1 min-w-0 h-full flex flex-col p-3 gap-3 overflow-hidden">
-        {/* System Breadcrumbs / Header Rail */}
-        <header className="flex items-center justify-between px-2 h-8 shrink-0">
-          <div className="flex items-center gap-4">
-            <span className="text-[10px] font-bold text-zinc-700 tracking-[0.2em] uppercase">SYSTEM.LOCAL_SYNC [v1.0.4]</span>
-            <div className="h-3 w-px bg-aura-border" />
-            <span className="text-[10px] font-bold text-aura-accent uppercase tracking-widest leading-none pt-0.5">{currentView.replace('-', '_')}</span>
-          </div>
-          <div className="flex items-center gap-6">
-            <div className="flex items-center gap-2">
-              <div className="w-1 h-1 bg-aura-success rounded-full animate-pulse shadow-[0_0_5px_#10b981]" />
-              <span className="text-[9px] font-bold text-zinc-700 uppercase tracking-widest">Linked</span>
-            </div>
-            <div className="text-[9px] font-mono text-zinc-800 uppercase tracking-widest">
-              {new Date().toISOString().split('T')[0]}
-            </div>
-          </div>
-        </header>
-
-        <div className="flex-1 min-h-0 relative aura-panel rounded-sm shadow-2xl shadow-black/50 overflow-hidden">
-          {currentView === 'terminal' && <CoreTerminal />}
-          {currentView === 'research' && <ResearchConsole />}
-          {currentView === 'logs' && <SystemLogs />}
-          {currentView === 'roadmap' && <RoadmapView />}
-          {currentView === 'stats' && <ROIDash />}
-          {['settings'].includes(currentView) && (
-            <div className="h-full flex items-center justify-center bg-aura-panel p-12">
-              <div className="text-center max-w-md">
-                <Settings size={48} className="mx-auto mb-6 text-zinc-900" />
-                <h2 className="text-sm font-bold text-zinc-600 uppercase tracking-[0.2em] mb-2">Control Substrate</h2>
-                <p className="text-xs text-zinc-800 leading-relaxed font-mono">Kernel configuration and multi-model prioritization modules are inactive in the current session. Reference SYSTEM_v1_ALPHA docs.</p>
-              </div>
-            </div>
-          )}
-        </div>
+      {/* MAIN */}
+      <main className="app-main" style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
+        <RootErrorBoundary>
+          <CoreTerminal />
+        </RootErrorBoundary>
       </main>
+
+      {/* BOTTOM BAR */}
+      <footer className="app-bottom" style={{ flexShrink: 0 }}>
+        <div className="bb-seg">
+          <Cpu size={11} />
+          <span>System Active</span>
+        </div>
+        <div className="bb-seg">
+          <span className={`api-status${apiOnline ? ' online' : ' offline'}`}>
+            <span className={`dot${apiOnline ? ' ok' : ' err'}`} />
+            API {apiOnline ? 'ONLINE' : 'OFFLINE'}
+          </span>
+        </div>
+      </footer>
     </div>
   );
 }

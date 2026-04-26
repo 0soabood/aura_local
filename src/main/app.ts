@@ -13,9 +13,19 @@ import { SnippetRepository } from '../db/repositories/SnippetRepository';
 import { RoadmapRepository } from '../db/repositories/RoadmapRepository';
 import { StatsRepository } from '../db/repositories/StatsRepository';
 import { ModelRunRepository } from '../db/repositories/ModelRunRepository';
+import { SupervisorStatsRepository } from '../db/repositories/SupervisorStatsRepository';
+import { OrchestrateSessionRepository } from '../db/repositories/OrchestrateSessionRepository';
+import { BlackboardEventRepository } from '../db/repositories/BlackboardEventRepository';
 import { AuraService } from './services/AuraService';
+import { SupervisorRouter } from '../lib/SupervisorRouter';
+import { classifyDomain } from '../lib/supervisors/prompts';
+import { SupervisorTask } from '../shared/types';
+import { ReactiveOrchestrator } from '../lib/ReactiveOrchestrator';
+import { reloadAuraMemory } from '../lib/memory/loader';
 
 export function createApiApp(): Express {
+  const supervisorRouter = new SupervisorRouter();
+  const reactiveOrchestrator = new ReactiveOrchestrator();
   const app = express();
 
   app.use(cors());
@@ -124,8 +134,222 @@ export function createApiApp(): Express {
     res.sendStatus(204);
   });
 
-  app.get('/api/health', (_req, res) => {
-    res.json({ status: 'ok' });
+  app.get('/api/health', async (_req, res) => {
+    const providers = await supervisorRouter.providerHealth();
+    res.json({ status: 'ok', providers });
+  });
+
+  // ── v2: Supervisor routing ──────────────────────────────────────────────
+  app.post('/api/supervisor/route', async (req, res) => {
+    let runId: string | undefined;
+    try {
+      const { objective, sessionId, domain } = req.body;
+
+      if (sessionId) {
+        const events = BlackboardEventRepository.findBySession(sessionId);
+        
+        // 1. Prefer terminal events first
+        const terminalTypes = ['synthesis_complete', 'escalation_required'];
+        const terminal = [...events].reverse().find(e => terminalTypes.includes(e.event_type));
+        if (terminal) {
+          return res.json({ final_response: terminal.content });
+        }
+
+        // 2. Prefer structured resolved state if exactly one clear answer exists
+        const resolvedUpdates = events.filter(e => 
+          e.event_type === 'blackboard_update' && e.metadata?.resolved === true
+        );
+        if (resolvedUpdates.length === 1) {
+          return res.json({ final_response: resolvedUpdates[0].content });
+        }
+      }
+
+      if (!objective) return res.status(400).json({ error: '`objective` is required' });
+
+      const resolvedSessionId = sessionId || crypto.randomUUID();
+      const resolvedDomain    = domain || classifyDomain(objective);
+
+      const task: SupervisorTask = {
+        domain:    resolvedDomain,
+        objective,
+        sessionId: resolvedSessionId,
+      };
+
+      // Persist the run as 'running' before the async work
+      runId = crypto.randomUUID();
+      ModelRunRepository.create({
+        id:       runId,
+        model_id: `supervisor:${resolvedDomain}`,
+        prompt:   objective,
+        status:   'running',
+        // session_id intentionally omitted: supervisor sessions live in the
+        // Blackboard and are not rows in research_sessions (FK would fail).
+      });
+
+      const result = await supervisorRouter.route(task);
+
+      // Update the run with the result
+      ModelRunRepository.update(runId, {
+        response:   result.final_response,
+        status:     'completed',
+        latency_ms: result.total_latency_ms,
+        supervisor: result.supervisor,
+        domain:     result.domain,
+        ...(result.escalation_reason ? { escalation_reason: result.escalation_reason } : {}),
+      });
+
+      // Log to system logs
+      SystemLogRepository.create(
+        'audit',
+        'SUPERVISOR',
+        `${result.supervisor} completed (${result.domain}) in ${result.total_latency_ms}ms — ROI: ${result.roi_estimate}/10`,
+        { run_id: runId, steps: result.steps.length, escalated: result.escalation },
+      );
+
+      res.json({ run_id: runId, ...result });
+    } catch (e: any) {
+      console.error('[POST /api/supervisor/route]', e);
+      try {
+        if (runId) ModelRunRepository.update(runId, { status: 'failed' });
+      } catch { /* best-effort — don't mask the original error */ }
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // v2: Supervisor stats
+  app.get('/api/supervisor/stats', (_req, res) => {
+    res.json(SupervisorStatsRepository.findAll());
+  });
+
+  // ── v3: Orchestrate Sessions ────────────────────────────────────────────
+
+  app.post('/api/sessions', (_req, res) => {
+    const id = crypto.randomUUID();
+    const session = OrchestrateSessionRepository.create(id, 'New Session');
+    res.status(201).json(session);
+  });
+
+  app.get('/api/sessions', (_req, res) => {
+    res.json(OrchestrateSessionRepository.list(50));
+  });
+
+  app.get('/api/sessions/:id/events', (req, res) => {
+    res.json(BlackboardEventRepository.findBySession(req.params.id));
+  });
+
+  app.delete('/api/sessions/:id', (req, res) => {
+    BlackboardEventRepository.deleteSession(req.params.id);
+    OrchestrateSessionRepository.delete(req.params.id);
+    res.sendStatus(204);
+  });
+
+  // ── v3: Reactive Blackboard orchestrator ────────────────────────────────
+  const inFlight = new Set<string>();
+
+  app.post('/api/orchestrate', async (req, res) => {
+    let runId: string | undefined;
+    let resolvedSessionId!: string;
+    try {
+      const { message, sessionId } = req.body;
+      if (!message?.trim()) return res.status(400).json({ error: '`message` is required' });
+
+      resolvedSessionId = sessionId || crypto.randomUUID();
+
+      if (inFlight.has(resolvedSessionId)) {
+        return res.status(409).json({ error: 'Session already in progress', session_id: resolvedSessionId });
+      }
+      inFlight.add(resolvedSessionId);
+
+      const isStream = req.body.stream === true;
+      const sendEvent = (event: string, data: any) => {
+        if (isStream) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      };
+
+      if (isStream) {
+        res.setHeader("Content-Type", "text/event-stream");
+        res.setHeader("Cache-Control", "no-cache");
+        res.setHeader("Connection", "keep-alive");
+      }
+
+      // Upsert the session row before executing — title = first 80 chars of message.
+      const existingSession = OrchestrateSessionRepository.findById(resolvedSessionId);
+      if (!existingSession) {
+        const title = message.trim().slice(0, 80);
+        OrchestrateSessionRepository.create(resolvedSessionId, title);
+      } else {
+        OrchestrateSessionRepository.touch(resolvedSessionId);
+      }
+
+      runId = crypto.randomUUID();
+      ModelRunRepository.create({
+        id:       runId,
+        model_id: 'orchestrator:reactive',
+        prompt:   message,
+        status:   'running',
+      });
+
+      const result = await reactiveOrchestrator.run({
+        sessionId: resolvedSessionId,
+        message,
+        onProgress: sendEvent
+      });
+
+      ModelRunRepository.update(runId, {
+        response:   result.finalResponse,
+        status:     'completed',
+        latency_ms: result.totalLatencyMs,
+      });
+
+      SystemLogRepository.create(
+        'audit',
+        'ORCHESTRATOR',
+        `Session ${resolvedSessionId} — ${result.terminationReason} after ${result.totalLoops} loop(s) in ${result.totalLatencyMs}ms`,
+        { run_id: runId, events: result.events.length },
+      );
+
+      const payload: Record<string, any> = {
+        run_id: runId,
+        session_id: resolvedSessionId,
+        sessionId: result.sessionId,
+        finalResponse: result.finalResponse,
+        terminationReason: result.terminationReason,
+        totalLoops: result.totalLoops,
+        totalLatencyMs: result.totalLatencyMs,
+      };
+
+      if (req.body.debug === true) {
+        payload.events = result.events;
+      }
+
+      if (isStream) {
+        sendEvent('done', payload);
+        res.end();
+      } else {
+        res.json(payload);
+      }
+    } catch (e: any) {
+      console.error('[POST /api/orchestrate]', e);
+      try { if (runId) ModelRunRepository.update(runId, { status: 'failed' }); } catch { /* best-effort */ }
+      res.status(500).json({ error: e.message });
+    } finally {
+      if (resolvedSessionId) inFlight.delete(resolvedSessionId);
+    }
+  });
+
+  // ── Admin ────────────────────────────────────────────────────────────────
+  app.post('/api/admin/reload-memory', (_req, res) => {
+    try {
+      reloadAuraMemory();
+      console.log('[AURA MEMORY] Hot-reload triggered via /api/admin/reload-memory');
+      res.json({
+        success: true,
+        reloadedAt: new Date().toISOString(),
+        files: ['SOUL.md', 'USER.md', 'AGENTS.md'],
+      });
+    } catch (err: any) {
+      console.error('[AURA MEMORY] Hot-reload failed:', err.message);
+      res.status(500).json({ success: false, error: err.message });
+    }
   });
 
   // Error-handling middleware (4-arg) — must be registered after the routes.

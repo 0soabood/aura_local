@@ -8,10 +8,17 @@
  * Supertest without booting Vite or binding a port.
  */
 
+// dotenv MUST be the first import so process.env is populated before any
+// provider module captures it at class-instantiation time.
+import dotenv from 'dotenv';
+dotenv.config({ path: '.env' });
+console.log('[ENV] GROQ_API_KEY present:', !!process.env.GROQ_API_KEY);
+
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { schema } from '../db/index';
 import { createApiApp } from './app';
+import { initializeAuraMemory, startMemoryWatcher } from '../lib/memory/loader';
 
 async function bootstrap() {
   const PORT = 3000;
@@ -20,10 +27,14 @@ async function bootstrap() {
   schema.up();
   console.log('AURA DB initialized');
 
-  // 2. API routes (factored out so tests can mount this without Vite)
+  // 2. Memory — load into cache at boot; getAuraMemory() is called per-request by orchestrators.
+  initializeAuraMemory();
+  startMemoryWatcher(); // no-op unless AURA_MEMORY_WATCH=true
+
+  // 3. API routes (factored out so tests can mount this without Vite)
   const app = createApiApp();
 
-  // 3. Renderer Integration
+  // 4. Renderer Integration
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },
