@@ -111,7 +111,7 @@ export class ReactiveOrchestrator {
     // Seed the ledger with the user's message.
     BlackboardEventRepository.append(sessionId, 'user_message', 'user', message);
 
-    task.onProgress?.('status', { message: 'Orchestrator started...' });
+    try { task.onProgress?.('status', { message: 'Orchestrator started...' }); } catch { /* ignore callback errors */ }
 
     while (loops < MAX_LOOPS) {
       const events = BlackboardEventRepository.findBySession(sessionId);
@@ -264,10 +264,7 @@ export class ReactiveOrchestrator {
         `confidence=${winner.confidence.toFixed(2)}  action="${winner.proposedAction}"`,
       );
 
-      task.onProgress?.('agent_update', { 
-        agent: winner.agentName, 
-        action: winner.proposedAction 
-      });
+      try { task.onProgress?.('agent_update', { agent: winner.agentName, action: winner.proposedAction }); } catch { /* ignore callback errors */ }
 
       try {
         let output = await winningAgent.execute(events, winner);
@@ -290,10 +287,7 @@ export class ReactiveOrchestrator {
           output.metadata,
         );
 
-        task.onProgress?.('agent_complete', { 
-          agent: winner.agentName, 
-          result: output.content 
-        });
+        try { task.onProgress?.('agent_complete', { agent: winner.agentName, result: output.content }); } catch { /* ignore callback errors */ }
 
         // Agent signals termination by choosing a terminal event_type.
         if (
@@ -317,9 +311,7 @@ export class ReactiveOrchestrator {
           }),
         );
 
-        task.onProgress?.('error', { 
-          message: `Agent ${winner.agentName} encountered an error: ${err.message}` 
-        });
+        try { task.onProgress?.('error', { message: `Agent ${winner.agentName} encountered an error: ${err.message}` }); } catch { /* ignore callback errors */ }
 
         // Don't break — let the next loop's bid phase react to the error event.
       }
@@ -356,11 +348,18 @@ export class ReactiveOrchestrator {
   ): Promise<AgentOutput> {
     const userMsg = events.find(e => e.event_type === 'user_message')?.content ?? '';
     const agentOutputs = events.filter(e => e.event_type === 'agent_output' || e.event_type === 'code_written');
+    const isCodeFocused = /\[Focus:\s*code\]/i.test(userMsg);
 
-    const synthBase =
+    let synthBase =
       'You are a synthesis engine. Combine the agent outputs below into a single, ' +
       'coherent, concise response that directly addresses the user\'s request. ' +
       'Provide the final consolidated answer only — no meta-commentary.';
+
+    if (isCodeFocused) {
+      synthBase +=
+        '\n\nFor CODE requests: Provide a brief explanation, ONE main code example — ' +
+        'no redundant variations. Do NOT write long encyclopedic overviews.';
+    }
 
     const prompt =
       agentOutputs.length === 0
@@ -408,15 +407,19 @@ export class ReactiveOrchestrator {
    * agent_output. Falls back to a safe explicit error if nothing exists.
    */
   private extractFinalResponse(events: BlackboardEvent[]): string {
+    // Strip [agent_name]: prefix lines injected into specialist outputs before synthesis.
+    const stripAgentTags = (text: string): string =>
+      text.replace(/^\[[a-z_]+\]:\s*\n?/gm, '').trim();
+
     // 1. Prefer explicit terminal state
     const terminalTypes: EventType[] = ['synthesis_complete', 'escalation_required'];
     const terminal = [...events].reverse().find(e => terminalTypes.includes(e.event_type));
-    if (terminal && terminal.content.trim()) return terminal.content;
+    if (terminal && terminal.content.trim()) return stripAgentTags(terminal.content);
 
     // 2. Fall back to the last substantive specialist output (e.g. if max loops was hit)
     const specialistTypes: EventType[] = ['agent_output', 'code_written', 'execution_error'];
     const lastSpecialist = [...events].reverse().find(e => specialistTypes.includes(e.event_type) && e.author !== 'user');
-    if (lastSpecialist && lastSpecialist.content.trim()) return lastSpecialist.content;
+    if (lastSpecialist && lastSpecialist.content.trim()) return stripAgentTags(lastSpecialist.content);
 
     // 3. Safe explicit fallback (never echo the user's input)
     return 'No final response generated.';

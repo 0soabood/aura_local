@@ -1,8 +1,7 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import '@testing-library/jest-dom';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import CoreTerminal from '../../src/components/CoreTerminal';
+import CoreTerminal from './CoreTerminal';
 
 describe('CoreTerminal Resiliency (SSE Streaming)', () => {
   let streamMock: any;
@@ -37,7 +36,7 @@ describe('CoreTerminal Resiliency (SSE Streaming)', () => {
     fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
 
     await waitFor(() => {
-      expect(screen.getByText('Single stream response')).toBeInTheDocument();
+      expect(screen.getByText('Single stream response')).toBeTruthy();
     });
 
     // Ensure it only renders one assistant response
@@ -62,7 +61,7 @@ describe('CoreTerminal Resiliency (SSE Streaming)', () => {
     fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
 
     await waitFor(() => {
-      expect(screen.getByText('No final response generated.')).toBeInTheDocument();
+      expect(screen.getByText('No final response generated.')).toBeTruthy();
     });
 
     // The user message should only appear as the user bubble, not the assistant response
@@ -81,8 +80,8 @@ describe('CoreTerminal Resiliency (SSE Streaming)', () => {
     fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
 
     await waitFor(() => {
-      expect(screen.getByText('Agent research_agent encountered an error: API timeout')).toBeInTheDocument();
-      expect(screen.getByText('ERROR')).toBeInTheDocument(); // checks the status line
+      expect(screen.getByText('Agent research_agent encountered an error: API timeout')).toBeTruthy();
+      expect(screen.getByText('ERROR')).toBeTruthy(); // checks the status line
     });
   });
 });

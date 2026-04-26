@@ -23,6 +23,20 @@ import { SupervisorTask } from '../shared/types';
 import { ReactiveOrchestrator } from '../lib/ReactiveOrchestrator';
 import { reloadAuraMemory } from '../lib/memory/loader';
 
+/** Parse a query param integer, clamped to [min, max]. Returns null if the value is present but not a valid integer. */
+function parseLimitParam(val: string | undefined, defaultVal = 100, min = 1, max = 500): number | null {
+  if (val === undefined || val === '') return defaultVal;
+  const n = parseInt(val, 10);
+  if (isNaN(n)) return null;
+  return Math.max(min, Math.min(max, n));
+}
+
+/** Parse a numeric ID param. Returns null if not a valid integer. */
+function parseIdParam(val: string): number | null {
+  const n = parseInt(val, 10);
+  return isNaN(n) ? null : n;
+}
+
 export function createApiApp(): Express {
   const supervisorRouter = new SupervisorRouter();
   const reactiveOrchestrator = new ReactiveOrchestrator();
@@ -33,7 +47,8 @@ export function createApiApp(): Express {
 
   // ── Model Runs ──────────────────────────────────────────────────────────
   app.get('/api/model-runs', (req, res) => {
-    const limit = req.query.limit ? parseInt(req.query.limit as string) : 100;
+    const limit = parseLimitParam(req.query.limit as string | undefined);
+    if (limit === null) return res.status(400).json({ error: '`limit` must be a positive integer' });
     res.json(ModelRunRepository.list(limit));
   });
 
@@ -60,12 +75,15 @@ export function createApiApp(): Express {
 
   // ── System Logs ─────────────────────────────────────────────────────────
   app.get('/api/logs', (req, res) => {
-    const limit = req.query.limit ? parseInt(req.query.limit as string) : 100;
+    const limit = parseLimitParam(req.query.limit as string | undefined);
+    if (limit === null) return res.status(400).json({ error: '`limit` must be a positive integer' });
     res.json(SystemLogRepository.list(limit));
   });
 
   app.get('/api/logs/:id', (req, res) => {
-    const log = SystemLogRepository.findById(parseInt(req.params.id));
+    const id = parseIdParam(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'invalid id' });
+    const log = SystemLogRepository.findById(id);
     if (log) res.json(log);
     else res.status(404).json({ error: 'Log not found' });
   });
@@ -77,13 +95,21 @@ export function createApiApp(): Express {
   });
 
   app.delete('/api/logs/:id', (req, res) => {
-    SystemLogRepository.delete(parseInt(req.params.id));
+    const id = parseIdParam(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'invalid id' });
+    SystemLogRepository.delete(id);
     res.sendStatus(204);
   });
 
   // ── Roadmap (via Service for transactions/audit) ────────────────────────
   app.post('/api/roadmap', async (req, res) => {
     const { title, description, priority, roi_score, lane } = req.body;
+    if (!title || typeof title !== 'string' || title.trim().length === 0) {
+      return res.status(400).json({ error: '`title` is required' });
+    }
+    if (title.length > 500) {
+      return res.status(400).json({ error: '`title` must be 500 characters or fewer' });
+    }
     const result = await AuraService.createRoadmapMilestone(
       title, description, priority, roi_score, lane
     );
@@ -115,6 +141,12 @@ export function createApiApp(): Express {
 
   app.post('/api/snippets', (req, res) => {
     const { title, content, tags, source_url } = req.body;
+    if (!title || typeof title !== 'string' || title.trim().length === 0) {
+      return res.status(400).json({ error: '`title` is required' });
+    }
+    if (content && typeof content === 'string' && content.length > 50_000) {
+      return res.status(400).json({ error: '`content` must be 50,000 characters or fewer' });
+    }
     const id = crypto.randomUUID();
     SnippetRepository.create({ id, title, content, tags, source_url });
     res.status(201).json({ id });
@@ -252,6 +284,7 @@ export function createApiApp(): Express {
     try {
       const { message, sessionId } = req.body;
       if (!message?.trim()) return res.status(400).json({ error: '`message` is required' });
+      if (message.length > 10_000) return res.status(400).json({ error: '`message` must be 10,000 characters or fewer' });
 
       resolvedSessionId = sessionId || crypto.randomUUID();
 

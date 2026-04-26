@@ -83,23 +83,13 @@ export class CodeAgent extends BaseAgent {
     const isCodeMatch = CODE_RE.test(userMsg);
     const model = this.getHealthyModel();
 
-    console.log(`\n--- CodeAgent Bid Trace ---`);
-    console.log(`Input: "${userMsg.substring(0, 60)}..."`);
-    console.log(`CODE_RE matched: ${isCodeMatch}`);
-    console.log(`Chosen model: ${model ?? 'NONE'}`);
-    console.log(`Provider health: ${!!model}`);
-
     if (!model) {
-      console.log(`Returned confidence: 0.0 (Provider Unavailable)`);
-      console.log(`---------------------------\n`);
       return { agentName: 'code_agent', confidence: 0.0, proposedAction: 'Code provider unavailable.', expectedOutputShape: 'code' };
     }
 
     // Break dead-path recovery loops (ENOENT / placeholder file path failures).
     const lastCodeAgentError = this.lastCodeAgentErrorMessage(events);
     if (lastCodeAgentError && DEAD_PATH_ERROR_RE.test(lastCodeAgentError)) {
-      console.log(`Returned confidence: 0.0 (Dead path recovery)`);
-      console.log(`---------------------------\n`);
       return {
         agentName: 'code_agent',
         confidence: 0.0,
@@ -112,8 +102,6 @@ export class CodeAgent extends BaseAgent {
     // This prevents inputs like "make me money" or "heart surgery" from triggering
     // the code-error-recovery path when another agent has already failed.
     if (!userMsg.trim() || !isCodeMatch) {
-      console.log(`Returned confidence: 0.0 (No code keywords)`);
-      console.log(`---------------------------\n`);
       return {
         agentName: 'code_agent',
         confidence: 0.0,
@@ -142,8 +130,6 @@ export class CodeAgent extends BaseAgent {
       proposedAction = 'Repeated execution failures — abstaining to allow fallback';
     }
 
-    console.log(`Returned confidence: ${confidence}`);
-    console.log(`---------------------------\n`);
     return { agentName: 'code_agent', confidence, proposedAction, expectedOutputShape: 'code' };
   }
 

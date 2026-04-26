@@ -282,6 +282,61 @@ describe('Process resilience', () => {
   });
 });
 
+describe('Input Validation', () => {
+  it('GET /api/logs?limit=abc returns 400', async () => {
+    const res = await request(app).get('/api/logs?limit=abc');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/limit/);
+  });
+
+  it('GET /api/model-runs?limit=abc returns 400', async () => {
+    const res = await request(app).get('/api/model-runs?limit=abc');
+    expect(res.status).toBe(400);
+  });
+
+  it('GET /api/logs/not-a-number returns 400', async () => {
+    const res = await request(app).get('/api/logs/not-a-number');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('invalid id');
+  });
+
+  it('DELETE /api/logs/not-a-number returns 400', async () => {
+    const res = await request(app).delete('/api/logs/not-a-number');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('invalid id');
+  });
+
+  it('POST /api/roadmap without title returns 400', async () => {
+    const res = await request(app).post('/api/roadmap').send({ priority: 1 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/title/);
+  });
+
+  it('POST /api/roadmap with title > 500 chars returns 400', async () => {
+    const res = await request(app).post('/api/roadmap').send({ title: 'x'.repeat(501) });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/500/);
+  });
+
+  it('POST /api/snippets without title returns 400', async () => {
+    const res = await request(app).post('/api/snippets').send({ content: 'some content' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/title/);
+  });
+
+  it('POST /api/snippets with oversized content returns 400', async () => {
+    const res = await request(app).post('/api/snippets').send({ title: 'T', content: 'x'.repeat(50_001) });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/50,000/);
+  });
+
+  it('POST /api/orchestrate with message > 10K chars returns 400', async () => {
+    const res = await request(app).post('/api/orchestrate').send({ message: 'x'.repeat(10_001) });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/10,000/);
+  });
+});
+
 describe('POST /api/admin/reload-memory', () => {
   it('returns success shape on a clean reload', async () => {
     vi.spyOn(loader, 'reloadAuraMemory').mockReturnValue({
