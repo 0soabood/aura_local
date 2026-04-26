@@ -1,7 +1,13 @@
 import { AgentBid, AgentOutput, BlackboardEvent } from '../../shared/types';
 import { BaseAgent } from './types';
 
-const PRIMARY_ROUTING = 'groq:llama-3.1-8b-instant';
+const SYNTHESIS_MODELS = [
+  'anthropic:claude-3-5-sonnet-latest',
+  'openai:gpt-4o',
+  'groq:llama-3.1-8b-instant',
+  'gemini:gemini-2.5-flash',
+  'openrouter:auto'
+];
 
 const SYSTEM_PROMPT =
   'You are the Synthesis Agent — a world-class editor and communicator. ' +
@@ -44,8 +50,12 @@ const SYSTEM_PROMPT =
 export class SynthesisAgent extends BaseAgent {
   readonly name = 'synthesis_agent' as const;
 
+  private getHealthyModel(): string | undefined {
+    return SYNTHESIS_MODELS.find(m => this.isProviderHealthy(m));
+  }
+
   evaluate(events: BlackboardEvent[]): AgentBid {
-    if (!this.isProviderHealthy(PRIMARY_ROUTING)) {
+    if (!this.getHealthyModel()) {
       return this.bid(0, 'Synthesis provider unavailable.');
     }
 
@@ -78,8 +88,13 @@ export class SynthesisAgent extends BaseAgent {
     const agentOutputs = events.filter(e => e.event_type === 'agent_output' || e.event_type === 'code_written');
     const messages = this.buildMessages(events, SYSTEM_PROMPT);
 
+    const model = this.getHealthyModel();
+    if (!model) {
+      throw new Error('No healthy synthesis provider available.');
+    }
+
     const result = await this.registry.call(
-      PRIMARY_ROUTING,
+      model,
       '',
       { temperature: 0.3, messages },
     );

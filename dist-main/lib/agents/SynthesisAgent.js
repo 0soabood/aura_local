@@ -2,7 +2,13 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SynthesisAgent = void 0;
 const types_1 = require("./types");
-const PRIMARY_ROUTING = 'groq:llama-3.1-8b-instant';
+const SYNTHESIS_MODELS = [
+    'anthropic:claude-3-5-sonnet-latest',
+    'openai:gpt-4o',
+    'groq:llama-3.1-8b-instant',
+    'gemini:gemini-2.5-flash',
+    'openrouter:auto'
+];
 const SYSTEM_PROMPT = 'You are the Synthesis Agent — a world-class editor and communicator. ' +
     'Your sole job is to produce the final, polished response the user actually reads.\n\n' +
     'SYNTHESIS MODE (when other agents have produced output):\n' +
@@ -41,8 +47,11 @@ class SynthesisAgent extends types_1.BaseAgent {
         super(...arguments);
         this.name = 'synthesis_agent';
     }
+    getHealthyModel() {
+        return SYNTHESIS_MODELS.find(m => this.isProviderHealthy(m));
+    }
     evaluate(events) {
-        if (!this.isProviderHealthy(PRIMARY_ROUTING)) {
+        if (!this.getHealthyModel()) {
             return this.bid(0, 'Synthesis provider unavailable.');
         }
         const last = events.at(-1);
@@ -65,7 +74,11 @@ class SynthesisAgent extends types_1.BaseAgent {
     async execute(events, bid) {
         const agentOutputs = events.filter(e => e.event_type === 'agent_output' || e.event_type === 'code_written');
         const messages = this.buildMessages(events, SYSTEM_PROMPT);
-        const result = await this.registry.call(PRIMARY_ROUTING, '', { temperature: 0.3, messages });
+        const model = this.getHealthyModel();
+        if (!model) {
+            throw new Error('No healthy synthesis provider available.');
+        }
+        const result = await this.registry.call(model, '', { temperature: 0.3, messages });
         if (result.rateLimited) {
             const retryHint = result.retryAfterSeconds
                 ? ` Please wait ${result.retryAfterSeconds}s before retrying.`

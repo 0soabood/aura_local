@@ -5,6 +5,54 @@ import { BlackboardEvent, OrchestrateResponse } from '../shared/types';
 
 const getAura = () => (window as any).aura;
 
+/**
+ * Dedicated client helper to consume the SSE streaming orchestrator endpoint.
+ * Decouples the low-level byte parsing from the React render cycle.
+ */
+async function streamOrchestrate(
+  payload: { message: string; sessionId: string | null; debug?: boolean },
+  onEvent: (event: string, data: any) => void
+) {
+  if (getAura().streamOrchestrate) {
+    return getAura().streamOrchestrate(payload, onEvent);
+  }
+
+  const response = await fetch('/api/orchestrate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...payload, stream: true })
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
+  }
+
+  const reader = response.body?.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let doneReading = false;
+
+  while (!doneReading && reader) {
+    const { value, done } = await reader.read();
+    doneReading = done;
+    if (value) {
+      const chunk = decoder.decode(value, { stream: true });
+      const lines = chunk.split("\n\n");
+
+      for (const line of lines) {
+        if (!line.startsWith("event: ")) continue;
+        
+        const eventType = line.split("\n")[0].replace("event: ", "");
+        const dataLine = line.split("\n")[1]?.replace("data: ", "") || "{}";
+        try {
+          onEvent(eventType, JSON.parse(dataLine));
+        } catch (e) {
+          console.error("SSE Parse Error:", e);
+        }
+      }
+    }
+  }
+}
+
 interface Message {
   id: string;
   role: 'user' | 'assistant' | 'error';
@@ -48,46 +96,26 @@ export default function CoreTerminal() {
       // Prefix mode directive if explicit routing is requested
       const routedMessage = mode === 'auto' ? text : `[Focus: ${mode}] ${text}`;
       
-      const response = await fetch('/api/orchestrate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: routedMessage, sessionId: activeId, stream: true, debug: true })
-      });
-
-      const reader = response.body?.getReader();
-      const decoder = new TextDecoder("utf-8");
-
-      let doneReading = false;
-      while (!doneReading && reader) {
-        const { value, done } = await reader.read();
-        doneReading = done;
-        if (value) {
-          const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split("\n\n");
-
-          for (const line of lines) {
-            if (!line.startsWith("event: ")) continue;
-            
-            const eventType = line.split("\n")[0].replace("event: ", "");
-            const dataLine = line.split("\n")[1]?.replace("data: ", "") || "{}";
-            const data = JSON.parse(dataLine);
-
-            if (eventType === 'done') {
-              setActiveId(data.sessionId);
-              setMessages(prev => [...prev, { 
-                id: crypto.randomUUID(), role: 'assistant', content: data.finalResponse 
-              }]);
-              setDebugData({
-                events: data.events || [], latency: data.totalLatencyMs, loops: data.totalLoops, termination: data.terminationReason
-              });
-              setStatus('complete');
-            } else if (eventType === 'error') {
-              // Optional: Render non-fatal specialist errors as transient toasts, or just log them
-              console.warn("Orchestrator Event Error:", data.message);
-            }
+      await streamOrchestrate(
+        { message: routedMessage, sessionId: activeId, debug: true },
+        (eventType, data) => {
+          if (eventType === 'done') {
+            setActiveId(data.sessionId);
+            setMessages(prev => [...prev, { 
+              id: crypto.randomUUID(), role: 'assistant', content: data.finalResponse 
+            }]);
+            setDebugData({
+              events: data.events || [], latency: data.totalLatencyMs, loops: data.totalLoops, termination: data.terminationReason
+            });
+            setStatus('complete');
+          } else if (eventType === 'error') {
+            setMessages(prev => [...prev, { 
+              id: crypto.randomUUID(), role: 'error', content: data.message || 'Orchestration error' 
+            }]);
+            setStatus('error');
           }
         }
-      }
+      );
     } catch (err: any) {
       setMessages(prev => [...prev, { 
         id: crypto.randomUUID(), 
