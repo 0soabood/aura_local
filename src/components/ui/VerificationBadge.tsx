@@ -29,7 +29,7 @@ const CONFIG: Record<VerificationState, {
     color: 'text-zinc-600', 
     icon: Clock,
     bg: 'bg-zinc-900/20',
-    border: 'border-zinc-800'
+    border: 'border-zinc-600'
   },
   self_checked: { 
     label: 'INTERNAL_CHECK', 

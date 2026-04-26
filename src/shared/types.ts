@@ -91,6 +91,10 @@ export interface ModelRun {
   latency_ms?: number;
   verification_state: VerificationState;
   verification_reasoning?: string;
+  // v2 supervisor fields
+  supervisor?: string;
+  domain?: SupervisorDomain;
+  escalation_reason?: string;
   created_at: string;
 }
 
@@ -140,12 +144,82 @@ export interface TelemetryMetrics {
   recentActivity: { day: string; count: number }[];
 }
 
+// ── v2: Supervisor / Multi-model types ──────────────────────────────────────
+
+export type SupervisorDomain = 'research' | 'code' | 'planning';
+
+export interface Step {
+  model: string;                                       // "provider:model-id"
+  prompt: string;
+  expected_output_shape: 'json' | 'text' | 'code';
+  result?: string;                                     // populated after execution
+  latency_ms?: number;
+}
+
+export interface SupervisorTask {
+  domain: SupervisorDomain;
+  objective: string;
+  sessionId: string;
+  depth?: number;                                      // escalation recursion guard
+}
+
+export interface SupervisorPlan {
+  model_sequence: string[];
+  reasoning: string;
+  steps: Step[];
+  blackboard_updates: Record<string, any>;
+  escalation: boolean;
+  escalation_reason: string | null;
+  next_supervisor?: SupervisorDomain;
+  roi_estimate: number;                                // 0–10
+}
+
+export interface SupervisorResponse extends SupervisorPlan {
+  supervisor: string;
+  domain: SupervisorDomain;
+  final_response: string;
+  total_latency_ms: number;
+}
+
+export interface BlackboardEntry {
+  id: number;
+  session_id: string;
+  key: string;
+  value: string;                                       // JSON string
+  published_by: string;
+  published_at: string;
+  expires_at: string | null;
+  consumed_count: number;
+}
+
+export interface SupervisorStats {
+  supervisor: string;
+  domain: SupervisorDomain;
+  tasks_completed: number;
+  roi_total: number;
+  total_latency_ms: number;
+  /** Computed: total_latency_ms / tasks_completed */
+  avg_completion_time_ms: number;
+}
+
+export interface OrchestrateSession {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OrchestrateResponse extends OrchestratorResult {
+  run_id: string;
+  session_id: string;
+}
+
 export interface AuraAPI {
   // Model Runs
   createModelRun: (data: Partial<ModelRun>) => Promise<{ id: string }>;
   listModelRuns: (limit?: number) => Promise<ModelRun[]>;
   updateModelRun: (id: string, updates: Partial<ModelRun>) => Promise<void>;
-  
+
   // Telemetry
   getStats: () => Promise<TelemetryMetrics>;
 
@@ -167,10 +241,93 @@ export interface AuraAPI {
   updateSnippet: (id: string, updates: Partial<ResearchSnippet>) => Promise<void>;
   deleteSnippet: (id: string) => Promise<void>;
   checkHealth: () => Promise<boolean>;
+
+  // v2: Supervisor routing (legacy)
+  routeSupervisor: (task: Omit<SupervisorTask, 'depth'>) => Promise<SupervisorResponse>;
+
+  // v3: Reactive orchestrator
+  orchestrate: (message: string, sessionId?: string) => Promise<OrchestrateResponse>;
+
+  // v3: Session management
+  createSession: () => Promise<OrchestrateSession>;
+  listSessions: () => Promise<OrchestrateSession[]>;
+  getSessionEvents: (sessionId: string) => Promise<BlackboardEvent[]>;
+  deleteSession: (sessionId: string) => Promise<void>;
 }
 
 declare global {
   interface Window {
     aura: AuraAPI;
   }
+}
+
+// ── v3: Reactive Blackboard / Actor-Pub-Sub types ────────────────────────────
+
+export const EVENT_TYPES = [
+  'user_message',
+  'agent_output',
+  'execution_error',
+  'synthesis_complete',
+  'escalation_required',
+  'code_written',
+  'code_context_retrieved',
+] as const;
+
+export type EventType = (typeof EVENT_TYPES)[number];
+
+export const AGENT_NAMES = [
+  'research_agent',
+  'code_agent',
+  'synthesis_agent',
+  'orchestrator',
+] as const;
+
+export type AgentName = (typeof AGENT_NAMES)[number];
+
+/** Row in the append-only blackboard_events ledger */
+export interface BlackboardEvent {
+  id: number;
+  session_id: string;
+  seq: number;              // monotonic per session, 1-based
+  event_type: EventType;
+  author: AgentName | 'user';
+  content: string;          // raw text or JSON string — never binary
+  metadata: string | null;  // JSON: { confidence?, latency_ms?, model_id?, … }
+  created_at: string;
+}
+
+/** Returned by ReactiveAgent.evaluate() — zero-cost, synchronous, no LLM calls */
+export interface AgentBid {
+  agentName: AgentName;
+  confidence: number;         // 0.0 (abstain) – 1.0 (certain)
+  proposedAction: string;     // human-readable intent for logging
+  expectedOutputShape: 'text' | 'json' | 'code';
+}
+
+/** Returned by ReactiveAgent.execute() — agent controls termination via event_type */
+export interface AgentOutput {
+  event_type: EventType;      // 'synthesis_complete' | 'escalation_required' signals loop exit
+  content: string;
+  metadata?: Record<string, unknown>;
+}
+
+export type OrchestratorTermination =
+  | 'synthesis_complete'
+  | 'escalation_required'
+  | 'max_loops'
+  | 'no_bid';
+
+export interface OrchestratorResult {
+  sessionId: string;
+  events: BlackboardEvent[];
+  finalResponse: string;
+  totalLoops: number;
+  totalLatencyMs: number;
+  terminationReason: OrchestratorTermination;
+}
+
+/** Replaces SupervisorTask for the v3 orchestrator */
+export interface OrchestratorTask {
+  sessionId: string;
+  message: string;  // the raw user text; no domain pre-classification needed
 }

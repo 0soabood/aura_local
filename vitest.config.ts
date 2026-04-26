@@ -17,5 +17,6 @@ export default defineConfig({
     // Repository tests share a single in-memory DB per worker; isolate keeps
     // suites from leaking schema state across files.
     isolate: true,
+    exclude: ['**/node_modules/**', '**/dist-main/**', '**/dist/**'],
   },
 });

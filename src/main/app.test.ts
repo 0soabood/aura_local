@@ -1,14 +1,22 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
 import request from 'supertest';
 import type { Express } from 'express';
 import { createApiApp } from './app';
 import db from '../db/connection';
+import * as loader from '../lib/memory/loader';
 
 // Schema migration + per-test table wipe come from tests/setup.ts.
 
 let app: Express;
 
 beforeAll(() => {
+  // Seed the cache so getAuraMemory() doesn't throw during tests.
+  vi.spyOn(loader, 'getAuraMemory').mockReturnValue({
+    soul: 'test soul',
+    user: 'test user',
+    agents: 'test agents',
+    combinedSystemContext: 'test context',
+  });
   app = createApiApp();
 });
 
@@ -16,7 +24,8 @@ describe('GET /api/health', () => {
   it('returns ok', async () => {
     const res = await request(app).get('/api/health');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ status: 'ok' });
+    expect(res.body.status).toBe('ok');
+    expect(res.body).toHaveProperty('providers');
   });
 });
 
@@ -270,5 +279,98 @@ describe('Process resilience', () => {
     // After a bad request, normal routes still work.
     const res = await request(app).get('/api/health');
     expect(res.status).toBe(200);
+  });
+});
+
+describe('Input Validation', () => {
+  it('GET /api/logs?limit=abc returns 400', async () => {
+    const res = await request(app).get('/api/logs?limit=abc');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/limit/);
+  });
+
+  it('GET /api/model-runs?limit=abc returns 400', async () => {
+    const res = await request(app).get('/api/model-runs?limit=abc');
+    expect(res.status).toBe(400);
+  });
+
+  it('GET /api/logs/not-a-number returns 400', async () => {
+    const res = await request(app).get('/api/logs/not-a-number');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('invalid id');
+  });
+
+  it('DELETE /api/logs/not-a-number returns 400', async () => {
+    const res = await request(app).delete('/api/logs/not-a-number');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('invalid id');
+  });
+
+  it('POST /api/roadmap without title returns 400', async () => {
+    const res = await request(app).post('/api/roadmap').send({ priority: 1 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/title/);
+  });
+
+  it('POST /api/roadmap with title > 500 chars returns 400', async () => {
+    const res = await request(app).post('/api/roadmap').send({ title: 'x'.repeat(501) });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/500/);
+  });
+
+  it('POST /api/snippets without title returns 400', async () => {
+    const res = await request(app).post('/api/snippets').send({ content: 'some content' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/title/);
+  });
+
+  it('POST /api/snippets with oversized content returns 400', async () => {
+    const res = await request(app).post('/api/snippets').send({ title: 'T', content: 'x'.repeat(50_001) });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/50,000/);
+  });
+
+  it('POST /api/orchestrate with message > 10K chars returns 400', async () => {
+    const res = await request(app).post('/api/orchestrate').send({ message: 'x'.repeat(10_001) });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/10,000/);
+  });
+});
+
+describe('POST /api/admin/reload-memory', () => {
+  it('returns success shape on a clean reload', async () => {
+    vi.spyOn(loader, 'reloadAuraMemory').mockReturnValue({
+      soul: 'new soul',
+      user: 'new user',
+      agents: 'new agents',
+      combinedSystemContext: 'new context',
+    });
+
+    const res = await request(app).post('/api/admin/reload-memory');
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(typeof res.body.reloadedAt).toBe('string');
+    expect(res.body.files).toEqual(['SOUL.md', 'USER.md', 'AGENTS.md']);
+  });
+
+  it('returns 500 and preserves old cache when reload throws', async () => {
+    vi.spyOn(loader, 'reloadAuraMemory').mockImplementation(() => {
+      throw new Error('disk read failed');
+    });
+    // getAuraMemory should still return the previously seeded value.
+    vi.spyOn(loader, 'getAuraMemory').mockReturnValue({
+      soul: 'old soul',
+      user: 'old user',
+      agents: 'old agents',
+      combinedSystemContext: 'old context',
+    });
+
+    const res = await request(app).post('/api/admin/reload-memory');
+    expect(res.status).toBe(500);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toMatch(/disk read failed/);
+
+    // Cache still returns the pre-failure value.
+    expect(loader.getAuraMemory().combinedSystemContext).toBe('old context');
   });
 });
