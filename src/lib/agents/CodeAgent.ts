@@ -1,6 +1,9 @@
 import { AgentBid, AgentOutput, BlackboardEvent } from '../../shared/types';
-import { CODE_CONTEXT_TOOLS, executeContextTool } from '../context/ContextTools';
+import { getFileSkeletonDef, getFileSkeletonFn, searchCodebaseDef, searchCodebaseFn } from '../context/ContextTools';
 import { BaseAgent } from './types';
+import { readFileDef, readFileFn } from '../tools/builtin/read_file';
+import { listDirectoryDef, listDirectoryFn } from '../tools/builtin/list_directory';
+import { ToolRegistry } from '../tools/registry';
 
 const CODE_RE =
   /\b(code|function|class|implement|debug|refactor|build|api|endpoint|script|bug|fix|parse|regex|sql|query|algorithm|test|deploy|lint|type|interface|module)\b/i;
@@ -133,6 +136,15 @@ export class CodeAgent extends BaseAgent {
     return { agentName: 'code_agent', confidence, proposedAction, expectedOutputShape: 'code' };
   }
 
+  private buildCodeToolRegistry(): ToolRegistry {
+    const reg = this.toolRegistry ?? new ToolRegistry();
+    if (!reg.has('get_file_skeleton')) reg.register(getFileSkeletonDef, getFileSkeletonFn);
+    if (!reg.has('search_codebase'))   reg.register(searchCodebaseDef,  searchCodebaseFn);
+    if (!reg.has('read_file'))         reg.register(readFileDef,         readFileFn);
+    if (!reg.has('list_directory'))    reg.register(listDirectoryDef,    listDirectoryFn);
+    return reg;
+  }
+
   async execute(events: BlackboardEvent[], bid: AgentBid): Promise<AgentOutput> {
     const messages = this.buildMessages(events, SYSTEM_PROMPT);
     const model = this.getHealthyModel();
@@ -141,52 +153,24 @@ export class CodeAgent extends BaseAgent {
       throw new Error('No healthy code provider available during execution.');
     }
 
-    const result = await this.registry.call(
+    const reg = this.buildCodeToolRegistry();
+    const reactResult = await this.runReactLoop(
+      messages,
       model,
-      '',
-      {
-        temperature: 0.15,
-        messages,
-        tools: [...CODE_CONTEXT_TOOLS],
-      },
+      reg.describe(),
+      reg,
+      { temperature: 0.15 },
     );
-
-    if (result.toolCalls?.length) {
-      const tc = result.toolCalls[0];
-
-      let args: Record<string, unknown>;
-      try {
-        args = JSON.parse(tc.function.arguments);
-      } catch {
-        throw new Error(`[CodeAgent] Malformed tool call arguments for "${tc.function.name}": ${tc.function.arguments}`);
-      }
-
-      const toolResult = await executeContextTool(tc.function.name, args);
-
-      if (toolResult.startsWith('Error:')) {
-        throw new Error(toolResult);
-      }
-
-      return {
-        event_type: 'code_context_retrieved',
-        content: toolResult,
-        metadata: {
-          tool_name:    tc.function.name,
-          tool_call_id: tc.id,
-          model_id:     result.model,
-          latency_ms:   result.latencyMs,
-          confidence:   bid.confidence,
-        },
-      };
-    }
 
     return {
       event_type: 'code_written',
-      content: result.text,
+      content:    reactResult.content,
       metadata: {
-        model_id:   result.model,
-        latency_ms: result.latencyMs,
+        model_id:   reactResult.model,
+        latency_ms: reactResult.latencyMs,
         confidence: bid.confidence,
+        tokens_in:  reactResult.tokensIn,
+        tokens_out: reactResult.tokensOut,
       },
     };
   }

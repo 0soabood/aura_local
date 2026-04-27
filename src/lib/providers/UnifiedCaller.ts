@@ -12,8 +12,16 @@
  */
 
 export interface CallerMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string | null;
+  /** Present on tool-result messages (role === 'tool'). */
+  tool_call_id?: string;
+  /** Present on assistant messages that contain tool calls. */
+  tool_calls?: Array<{
+    id: string;
+    type: 'function';
+    function: { name: string; arguments: string };
+  }>;
 }
 
 export interface CallerResult {

@@ -3,6 +3,11 @@ import { ReactiveAgent } from './agents/types';
 import { ResearchAgent } from './agents/ResearchAgent';
 import { CodeAgent } from './agents/CodeAgent';
 import { SynthesisAgent } from './agents/SynthesisAgent';
+import { ToolRegistry } from './tools/registry';
+import { getFileSkeletonDef, getFileSkeletonFn, searchCodebaseDef, searchCodebaseFn } from './context/ContextTools';
+import { readFileDef, readFileFn } from './tools/builtin/read_file';
+import { listDirectoryDef, listDirectoryFn } from './tools/builtin/list_directory';
+import { writeMemoryDef, writeMemoryFn } from './tools/builtin/write_memory';
 import { BlackboardEventRepository } from '../db/repositories/BlackboardEventRepository';
 import { assembleSystemPrompt } from './supervisors/prompts';
 import {
@@ -95,10 +100,17 @@ export class ReactiveOrchestrator {
   constructor() {
     this.registry = new ProviderRegistry();
 
+    const toolRegistry = new ToolRegistry()
+      .register(getFileSkeletonDef, getFileSkeletonFn)
+      .register(searchCodebaseDef,  searchCodebaseFn)
+      .register(readFileDef,        readFileFn)
+      .register(listDirectoryDef,   listDirectoryFn)
+      .register(writeMemoryDef,     writeMemoryFn);
+
     this.agents = [
-      new ResearchAgent(this.registry),
-      new CodeAgent(this.registry),
-      new SynthesisAgent(this.registry),
+      new ResearchAgent(this.registry, toolRegistry),
+      new CodeAgent(this.registry, toolRegistry),
+      new SynthesisAgent(this.registry, toolRegistry),
     ];
   }
 

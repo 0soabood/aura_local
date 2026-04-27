@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CodeAgent } from './CodeAgent';
 import { ProviderRegistry } from '../providers/ProviderRegistry';
+import { ToolRegistry } from '../tools/registry';
 import type { BlackboardEvent, AgentBid } from '../../shared/types';
 
 function evt(overrides: Partial<BlackboardEvent> & Pick<BlackboardEvent, 'event_type' | 'author' | 'content'>): BlackboardEvent {
@@ -72,51 +73,79 @@ describe('CodeAgent', () => {
       expect(result.content).toContain('function sort');
     });
 
-    it('returns code_context_retrieved when model calls a context tool', async () => {
-      vi.spyOn(registry, 'call').mockResolvedValue({
-        text: '',
-        model: 'llama-3.3-70b-versatile',
-        provider: 'groq',
-        latencyMs: 150,
-        rateLimited: false,
-        toolCalls: [{
-          id: 'tc1',
-          function: { name: 'search_codebase', arguments: JSON.stringify({ query: 'sort function' }) },
-        }],
-      } as any);
+    it('completes the ReAct loop: tool call then final code_written answer', async () => {
+      // Inject a mock ToolRegistry so the test controls tool execution.
+      const mockRegistry = new ToolRegistry();
+      mockRegistry.register(
+        { type: 'function', function: { name: 'search_codebase', description: '', parameters: { type: 'object', properties: { query: { type: 'string', description: '' } }, required: ['query'] } } },
+        async () => 'Found: src/utils/sort.ts',
+      );
+      agent = new CodeAgent(registry, mockRegistry);
+      vi.spyOn(registry, 'listProviders').mockReturnValue(['groq']);
 
-      // Mock the ContextTools module
-      const contextTools = await import('../context/ContextTools');
-      vi.spyOn(contextTools, 'executeContextTool').mockResolvedValue('Found: src/utils/sort.ts');
+      vi.spyOn(registry, 'call')
+        // Step 1: LLM calls the search_codebase tool
+        .mockResolvedValueOnce({
+          text: '',
+          model: 'llama-3.3-70b-versatile',
+          provider: 'groq',
+          latencyMs: 150,
+          rateLimited: false,
+          toolCalls: [{ id: 'tc1', function: { name: 'search_codebase', arguments: JSON.stringify({ query: 'sort function' }) } }],
+        } as any)
+        // Step 2: LLM reads the tool result and produces final code
+        .mockResolvedValueOnce({
+          text: '// src/utils/sort.ts\nfunction sort(arr: number[]) { return arr.sort(); }',
+          model: 'llama-3.3-70b-versatile',
+          provider: 'groq',
+          latencyMs: 200,
+          rateLimited: false,
+          toolCalls: [],
+        } as any);
 
       const events: BlackboardEvent[] = [
         evt({ event_type: 'user_message', author: 'user', content: 'find the sort function in the codebase' }),
       ];
       const result = await agent.execute(events, BID);
-      expect(result.event_type).toBe('code_context_retrieved');
-      expect(result.content).toContain('Found: src/utils/sort.ts');
+      expect(result.event_type).toBe('code_written');
+      expect(result.content).toContain('sort.ts');
     });
 
-    it('throws when context tool execution returns an error', async () => {
-      vi.spyOn(registry, 'call').mockResolvedValue({
-        text: '',
-        model: 'llama-3.3-70b-versatile',
-        provider: 'groq',
-        latencyMs: 100,
-        rateLimited: false,
-        toolCalls: [{
-          id: 'tc1',
-          function: { name: 'get_file_skeleton', arguments: JSON.stringify({ path: 'nonexistent.ts' }) },
-        }],
-      } as any);
+    it('returns code_written (no throw) when a tool call returns an error result', async () => {
+      // Tool errors are surfaced as content, not thrown — the LLM handles them.
+      const mockRegistry = new ToolRegistry();
+      mockRegistry.register(
+        { type: 'function', function: { name: 'get_file_skeleton', description: '', parameters: { type: 'object', properties: { filePath: { type: 'string', description: '' } }, required: ['filePath'] } } },
+        async () => 'Error: ENOENT no such file',
+      );
+      agent = new CodeAgent(registry, mockRegistry);
+      vi.spyOn(registry, 'listProviders').mockReturnValue(['groq']);
 
-      const contextTools = await import('../context/ContextTools');
-      vi.spyOn(contextTools, 'executeContextTool').mockResolvedValue('Error: ENOENT no such file');
+      vi.spyOn(registry, 'call')
+        .mockResolvedValueOnce({
+          text: '',
+          model: 'llama-3.3-70b-versatile',
+          provider: 'groq',
+          latencyMs: 100,
+          rateLimited: false,
+          toolCalls: [{ id: 'tc1', function: { name: 'get_file_skeleton', arguments: JSON.stringify({ filePath: 'nonexistent.ts' }) } }],
+        } as any)
+        .mockResolvedValueOnce({
+          text: 'I could not find the file. Please check the path.',
+          model: 'llama-3.3-70b-versatile',
+          provider: 'groq',
+          latencyMs: 90,
+          rateLimited: false,
+          toolCalls: [],
+        } as any);
 
       const events: BlackboardEvent[] = [
         evt({ event_type: 'user_message', author: 'user', content: 'read nonexistent.ts' }),
       ];
-      await expect(agent.execute(events, BID)).rejects.toThrow('Error: ENOENT');
+      const result = await agent.execute(events, BID);
+      expect(result.event_type).toBe('code_written');
+      // Agent should produce some response (no throw)
+      expect(result.content).toBeTruthy();
     });
   });
 });

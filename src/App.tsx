@@ -1,7 +1,13 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState } from 'react';
 import { Component, ErrorInfo, ReactNode } from 'react';
-import { Terminal, Activity, Search, Layers, FileText, Cpu } from 'lucide-react';
+import { motion } from 'motion/react';
+import { Terminal, Activity, Search, Layers, FileText, Cpu, ChevronLeft } from 'lucide-react';
 import CoreTerminal from './components/CoreTerminal';
+import ROIDash from './components/ROIDash';
+import RoadmapView from './components/RoadmapView';
+import ResearchConsole from './components/ResearchConsole';
+import SystemLogs from './components/SystemLogs';
+import NavigationHub from './components/NavigationHub';
 
 // ── Error boundary ────────────────────────────────────────────────────────────
 
@@ -31,10 +37,22 @@ class RootErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundary
   }
 }
 
+// ── View metadata ─────────────────────────────────────────────────────────────
+
+const VIEW_META: Record<string, { label: string; icon: React.ComponentType<{ size?: number }> }> = {
+  terminal: { label: 'AURA Terminal', icon: Terminal },
+  roi:      { label: 'ROI Dashboard', icon: Activity },
+  roadmap:  { label: 'Roadmap',       icon: Layers },
+  research: { label: 'Research Console', icon: Search },
+  logs:     { label: 'System Logs',   icon: FileText },
+};
+
 // ── App ───────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [apiOnline, setApiOnline] = useState(true);
+  const [activeView, setActiveView] = useState<string | null>(null);
+
+  const meta = activeView ? VIEW_META[activeView] : null;
 
   return (
     <div className="app density-compact" style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
@@ -43,8 +61,19 @@ export default function App() {
         <div className="app-header-title">
           <span className="dot live" />
           <b>AURA Shell</b>
-          <span className="sep">·</span>
-          <span className="sub">Minimal Autonomous Client</span>
+          {meta && (
+            <>
+              <span className="sep">·</span>
+              {meta.icon && <meta.icon size={10} />}
+              <span className="sub">{meta.label}</span>
+            </>
+          )}
+          {!meta && (
+            <>
+              <span className="sep">·</span>
+              <span className="sub">Minimal Autonomous Client</span>
+            </>
+          )}
         </div>
         <div className="app-header-meta">
           <span className="ver">v1.0.0</span>
@@ -54,7 +83,31 @@ export default function App() {
       {/* MAIN */}
       <main className="app-main" style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         <RootErrorBoundary>
-          <CoreTerminal />
+          {activeView === null ? (
+            <NavigationHub onNavigate={setActiveView} />
+          ) : (
+            <>
+              {/* back button */}
+              <motion.button
+                className="hub-back-btn"
+                onClick={() => setActiveView(null)}
+                initial={{ opacity: 0, x: -8 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ duration: 0.2 }}
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+              >
+                <ChevronLeft size={11} />
+                Hub
+              </motion.button>
+
+              {activeView === 'terminal'  && <CoreTerminal />}
+              {activeView === 'roi'       && <ROIDash />}
+              {activeView === 'roadmap'   && <RoadmapView />}
+              {activeView === 'research'  && <ResearchConsole />}
+              {activeView === 'logs'      && <SystemLogs />}
+            </>
+          )}
         </RootErrorBoundary>
       </main>
 
@@ -65,9 +118,9 @@ export default function App() {
           <span>System Active</span>
         </div>
         <div className="bb-seg">
-          <span className={`api-status${apiOnline ? ' online' : ' offline'}`}>
-            <span className={`dot${apiOnline ? ' ok' : ' err'}`} />
-            API {apiOnline ? 'ONLINE' : 'OFFLINE'}
+          <span className="api-status online">
+            <span className="dot ok" />
+            API ONLINE
           </span>
         </div>
       </footer>
