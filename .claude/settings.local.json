@@ -5,7 +5,12 @@
       "mcp__vexp__run_pipeline",
       "mcp__vexp__expand_vexp_ref",
       "Bash(npx tsc *)",
-      "Bash(npm install *)"
+      "Bash(npm install *)",
+      "Bash(npm test *)",
+      "Bash(npx vitest *)",
+      "Bash(tasklist)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }

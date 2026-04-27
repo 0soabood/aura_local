@@ -8,6 +8,8 @@
 
 import express, { Express, NextFunction, Request, Response } from 'express';
 import cors from 'cors';
+import * as fs from 'fs';
+import * as path from 'path';
 import { SystemLogRepository } from '../db/repositories/SystemLogRepository';
 import { SnippetRepository } from '../db/repositories/SnippetRepository';
 import { RoadmapRepository } from '../db/repositories/RoadmapRepository';
@@ -387,6 +389,18 @@ export function createApiApp(): Express {
   });
 
   // ── Memory file read/write ────────────────────────────────────────────────
+
+  app.get('/api/aura-roadmap', (_req, res) => {
+    try {
+      const roadmapPath = path.resolve(process.cwd(), 'AURA.md');
+      const content = fs.existsSync(roadmapPath)
+        ? fs.readFileSync(roadmapPath, 'utf-8')
+        : '# AURA.md not found\n\nCreate AURA.md in the project root.';
+      res.json({ content });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
 
   const MEMORY_FILE_ALLOWLIST = ['SOUL', 'USER', 'AGENTS'] as const;
   type MemoryFileKey = typeof MEMORY_FILE_ALLOWLIST[number];

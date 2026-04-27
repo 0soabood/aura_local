@@ -3,6 +3,9 @@ import { getFileSkeletonDef, getFileSkeletonFn, searchCodebaseDef, searchCodebas
 import { BaseAgent } from './types';
 import { readFileDef, readFileFn } from '../tools/builtin/read_file';
 import { listDirectoryDef, listDirectoryFn } from '../tools/builtin/list_directory';
+import { writeFileDef, writeFileFn } from '../tools/builtin/write_file';
+import { editFileDef, editFileFn } from '../tools/builtin/edit_file';
+import { runCommandDef, runCommandFn } from '../tools/builtin/run_command';
 import { ToolRegistry } from '../tools/registry';
 
 const CODE_RE =
@@ -142,6 +145,9 @@ export class CodeAgent extends BaseAgent {
     if (!reg.has('search_codebase'))   reg.register(searchCodebaseDef,  searchCodebaseFn);
     if (!reg.has('read_file'))         reg.register(readFileDef,         readFileFn);
     if (!reg.has('list_directory'))    reg.register(listDirectoryDef,    listDirectoryFn);
+    if (!reg.has('write_file'))        reg.register(writeFileDef,        writeFileFn);
+    if (!reg.has('edit_file'))         reg.register(editFileDef,         editFileFn);
+    if (!reg.has('run_command'))       reg.register(runCommandDef,       runCommandFn);
     return reg;
   }
 
