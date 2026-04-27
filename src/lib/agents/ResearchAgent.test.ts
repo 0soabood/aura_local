@@ -70,15 +70,16 @@ describe('ResearchAgent', () => {
       expect(result.content).toBe('Here is the research result');
     });
 
-    it('appends search results JSON when executed_tools is returned', async () => {
-      const mockTools = [{ name: 'web_search', result: 'some result' }];
+    it('returns agent_output with provider text (executed_tools no longer surfaced)', async () => {
       vi.spyOn(registry, 'call').mockResolvedValue({
-        text: 'Research findings',
+        text: 'Research findings on the AI market.',
         model: 'compound-beta-mini',
         provider: 'groq',
         latencyMs: 300,
         rateLimited: false,
-        executed_tools: mockTools,
+        // executed_tools was a Groq-specific field; runReactLoop no longer surfaces it.
+        executed_tools: [{ name: 'web_search', result: 'some result' }],
+        toolCalls: [],
       } as any);
 
       const events: BlackboardEvent[] = [
@@ -87,8 +88,6 @@ describe('ResearchAgent', () => {
       const result = await agent.execute(events, BID);
       expect(result.event_type).toBe('agent_output');
       expect(result.content).toContain('Research findings');
-      expect(result.content).toContain('[Search results:');
-      expect(result.content).toContain('web_search');
     });
   });
 });

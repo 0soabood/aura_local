@@ -1,5 +1,6 @@
 import * as path from 'path';
 import { SkeletonExtractor } from './SkeletonExtractor';
+import type { ToolDefinition, ToolFn } from '../tools/types';
 
 const PROJECT_ROOT = process.cwd();
 
@@ -71,6 +72,78 @@ export const CODE_CONTEXT_TOOLS = [
     },
   },
 ] as const;
+
+// ToolDefinition-compatible exports for ToolRegistry integration.
+
+export const getFileSkeletonDef: ToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'get_file_skeleton',
+    description:
+      'Returns the structural skeleton of a TypeScript/JavaScript file — imports, ' +
+      'class/interface/type definitions, and function signatures — with implementation bodies stripped out. ' +
+      'IMPORTANT: filePath must be a real path found via search_codebase. Never pass placeholder paths.',
+    parameters: {
+      type: 'object',
+      properties: {
+        filePath: {
+          type: 'string',
+          description: 'Absolute or relative path to an existing source file in this project.',
+        },
+      },
+      required: ['filePath'],
+      additionalProperties: false,
+    },
+  },
+};
+
+export const getFileSkeletonFn: ToolFn = async (args) => {
+  const validation = validateFilePath(args.filePath);
+  if ('error' in validation) return validation.error;
+  try {
+    return await SkeletonExtractor.getFileSkeleton(validation.resolved);
+  } catch (err: any) {
+    return `Error: Could not read file "${args.filePath}": ${err.message}`;
+  }
+};
+
+export const searchCodebaseDef: ToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'search_codebase',
+    description:
+      'Recursively searches the codebase for lines matching a regex/string query. ' +
+      'Returns up to 50 results in the format "filePath:lineNumber: matchedLine". ' +
+      'Use this to discover real file paths before calling get_file_skeleton.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Regex pattern or literal string to search for.',
+        },
+        dir: {
+          type: 'string',
+          description: 'Directory to search in. Defaults to "src".',
+        },
+      },
+      required: ['query'],
+      additionalProperties: false,
+    },
+  },
+};
+
+export const searchCodebaseFn: ToolFn = async (args) => {
+  if (!args.query || typeof args.query !== 'string') {
+    return 'Error: search_codebase requires a non-empty query string.';
+  }
+  const dir = typeof args.dir === 'string' ? args.dir : 'src';
+  try {
+    return await SkeletonExtractor.searchCodebase(args.query, dir);
+  } catch (err: any) {
+    return `Error: search_codebase failed: ${err.message}`;
+  }
+};
 
 export async function executeContextTool(name: string, args: Record<string, unknown>): Promise<string> {
   switch (name) {

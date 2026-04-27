@@ -1,5 +1,8 @@
 import { AgentBid, AgentOutput, BlackboardEvent } from '../../shared/types';
 import { BaseAgent } from './types';
+import { readFileDef, readFileFn } from '../tools/builtin/read_file';
+import { listDirectoryDef, listDirectoryFn } from '../tools/builtin/list_directory';
+import { ToolRegistry } from '../tools/registry';
 
 const RESEARCH_RE =
   /\b(research|find|search|market|analyze|analyse|trend|intel|report|price|news|data|what is|who is|how does|when did|where is|why does|benchmark|compare|survey)\b/i;
@@ -67,28 +70,34 @@ export class ResearchAgent extends BaseAgent {
     return { agentName: 'research_agent', confidence, proposedAction, expectedOutputShape: 'text' };
   }
 
+  private buildResearchToolRegistry(): ToolRegistry {
+    const reg = this.toolRegistry ?? new ToolRegistry();
+    if (!reg.has('read_file'))      reg.register(readFileDef,      readFileFn);
+    if (!reg.has('list_directory')) reg.register(listDirectoryDef, listDirectoryFn);
+    return reg;
+  }
+
   async execute(events: BlackboardEvent[], bid: AgentBid): Promise<AgentOutput> {
     const messages = this.buildMessages(events, SYSTEM_PROMPT);
+    const reg = this.buildResearchToolRegistry();
 
-    const result = await this.registry.call(
+    const reactResult = await this.runReactLoop(
+      messages,
       PRIMARY_ROUTING,
-      '',
-      { temperature: 0.1, messages },
+      reg.describe(),
+      reg,
+      { temperature: 0.1 },
     );
-
-    const searchResults = (result as any).executed_tools
-      ? JSON.stringify((result as any).executed_tools)
-      : undefined;
 
     return {
       event_type: 'agent_output',
-      content: searchResults ? `${result.text}\n\n[Search results: ${searchResults}]` : result.text,
+      content:    reactResult.content,
       metadata: {
-        model_id:   result.model,
-        latency_ms: result.latencyMs,
+        model_id:   reactResult.model,
+        latency_ms: reactResult.latencyMs,
         confidence: bid.confidence,
-        tokens_in:  result.tokensIn,
-        tokens_out: result.tokensOut,
+        tokens_in:  reactResult.tokensIn,
+        tokens_out: reactResult.tokensOut,
       },
     };
   }

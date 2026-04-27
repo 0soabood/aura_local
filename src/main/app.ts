@@ -21,7 +21,8 @@ import { SupervisorRouter } from '../lib/SupervisorRouter';
 import { classifyDomain } from '../lib/supervisors/prompts';
 import { SupervisorTask } from '../shared/types';
 import { ReactiveOrchestrator } from '../lib/ReactiveOrchestrator';
-import { reloadAuraMemory } from '../lib/memory/loader';
+import { reloadAuraMemory, getAuraMemory } from '../lib/memory/loader';
+import { writeMemoryFn } from '../lib/tools/builtin/write_memory';
 
 /** Parse a query param integer, clamped to [min, max]. Returns null if the value is present but not a valid integer. */
 function parseLimitParam(val: string | undefined, defaultVal = 100, min = 1, max = 500): number | null {
@@ -382,6 +383,45 @@ export function createApiApp(): Express {
     } catch (err: any) {
       console.error('[AURA MEMORY] Hot-reload failed:', err.message);
       res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // ── Memory file read/write ────────────────────────────────────────────────
+
+  const MEMORY_FILE_ALLOWLIST = ['SOUL', 'USER', 'AGENTS'] as const;
+  type MemoryFileKey = typeof MEMORY_FILE_ALLOWLIST[number];
+
+  app.get('/api/memory/:file', (req, res) => {
+    const file = req.params.file?.toUpperCase() as MemoryFileKey;
+    if (!(MEMORY_FILE_ALLOWLIST as readonly string[]).includes(file)) {
+      return res.status(400).json({ error: `Invalid memory file. Allowed: ${MEMORY_FILE_ALLOWLIST.join(', ')}` });
+    }
+    try {
+      const mem = getAuraMemory();
+      const content = file === 'SOUL' ? mem.soul : file === 'USER' ? mem.user : mem.agents;
+      res.json({ file, content });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.put('/api/memory/:file', async (req, res) => {
+    const file = req.params.file?.toUpperCase() as MemoryFileKey;
+    if (!(MEMORY_FILE_ALLOWLIST as readonly string[]).includes(file)) {
+      return res.status(400).json({ error: `Invalid memory file. Allowed: ${MEMORY_FILE_ALLOWLIST.join(', ')}` });
+    }
+    const { content } = req.body as { content?: string };
+    if (typeof content !== 'string' || !content.trim()) {
+      return res.status(400).json({ error: 'content is required and must be a non-empty string.' });
+    }
+    if (content.length > 50_000) {
+      return res.status(400).json({ error: 'content exceeds maximum length of 50,000 characters.' });
+    }
+    try {
+      await writeMemoryFn({ file, content });
+      res.json({ success: true, file, updatedAt: new Date().toISOString() });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
     }
   });
 

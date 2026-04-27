@@ -1,5 +1,7 @@
 import { AgentBid, AgentOutput, BlackboardEvent } from '../../shared/types';
 import { BaseAgent } from './types';
+import { writeMemoryDef, writeMemoryFn } from '../tools/builtin/write_memory';
+import { ToolRegistry } from '../tools/registry';
 
 const SYNTHESIS_MODELS = [
   'anthropic:claude-3-5-sonnet-latest',
@@ -106,10 +108,10 @@ export class SynthesisAgent extends BaseAgent {
       return {
         event_type: 'escalation_required',
         content: JSON.stringify({
-          reason: result.errorMessage ?? 'Gemini API rate limit exceeded.',
+          reason: result.errorMessage ?? 'Synthesis API rate limit exceeded.',
           actionable:
-            `The Gemini free-tier quota is exhausted.${retryHint} ` +
-            'To continue, wait for the quota window to reset or configure a paid API key.',
+            `The API quota is exhausted.${retryHint} ` +
+            'Wait for the quota window to reset or configure a paid API key.',
         }),
         metadata: {
           model_id:     result.model,
@@ -120,14 +122,31 @@ export class SynthesisAgent extends BaseAgent {
       };
     }
 
+    // Persist a one-sentence summary to USER.md — best-effort, never crashes synthesis.
+    const memReg = this.toolRegistry ?? new ToolRegistry();
+    if (!memReg.has('write_memory')) memReg.register(writeMemoryDef, writeMemoryFn);
+    const summary = result.text.slice(0, 200).replace(/\n/g, ' ').trim();
+    if (summary) {
+      memReg.execute({
+        id:        'synthesis_memory',
+        name:      'write_memory',
+        arguments: {
+          file:    'USER',
+          content: `Session summary (${new Date().toISOString().slice(0, 10)}): ${summary}`,
+        },
+      }).catch(() => { /* silent */ });
+    }
+
     return {
-      event_type: 'synthesis_complete',   // always terminal
-      content: result.text,
+      event_type: 'synthesis_complete',
+      content:    result.text,
       metadata: {
         model_id:   result.model,
         latency_ms: result.latencyMs,
         confidence: bid.confidence,
         mode:       agentOutputs.length > 0 ? 'synthesis' : 'conversational',
+        tokens_in:  result.tokensIn,
+        tokens_out: result.tokensOut,
       },
     };
   }

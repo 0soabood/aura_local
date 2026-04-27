@@ -343,7 +343,7 @@ export class ProviderRegistry {
     // Probe whether memory is present by checking for the SOUL section header,
     // which is a stable short string independent of the full memory length.
     const MEMORY_MARKER = '## AURA Identity (SOUL)';
-    const memoryPresent = systemMessages.some(m => m.content.includes(MEMORY_MARKER));
+    const memoryPresent = systemMessages.some(m => m.content?.includes(MEMORY_MARKER));
     const multipleSystemChannels = systemMessages.length > 1;
 
     console.log(
@@ -356,9 +356,10 @@ export class ProviderRegistry {
     );
 
     systemMessages.forEach((m, i) => {
+      const c = m.content ?? '';
       console.log(
-        `[LLM DEBUG] system[${i}] len=${m.content.length} ` +
-        `first120=${JSON.stringify(m.content.slice(0, 120))}`,
+        `[LLM DEBUG] system[${i}] len=${c.length} ` +
+        `first120=${JSON.stringify(c.slice(0, 120))}`,
       );
     });
 
