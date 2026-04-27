@@ -8,6 +8,9 @@ import { getFileSkeletonDef, getFileSkeletonFn, searchCodebaseDef, searchCodebas
 import { readFileDef, readFileFn } from './tools/builtin/read_file';
 import { listDirectoryDef, listDirectoryFn } from './tools/builtin/list_directory';
 import { writeMemoryDef, writeMemoryFn } from './tools/builtin/write_memory';
+import { writeFileDef, writeFileFn } from './tools/builtin/write_file';
+import { editFileDef, editFileFn } from './tools/builtin/edit_file';
+import { runCommandDef, runCommandFn } from './tools/builtin/run_command';
 import { BlackboardEventRepository } from '../db/repositories/BlackboardEventRepository';
 import { assembleSystemPrompt } from './supervisors/prompts';
 import {
@@ -105,7 +108,10 @@ export class ReactiveOrchestrator {
       .register(searchCodebaseDef,  searchCodebaseFn)
       .register(readFileDef,        readFileFn)
       .register(listDirectoryDef,   listDirectoryFn)
-      .register(writeMemoryDef,     writeMemoryFn);
+      .register(writeMemoryDef,     writeMemoryFn)
+      .register(writeFileDef,       writeFileFn)
+      .register(editFileDef,        editFileFn)
+      .register(runCommandDef,      runCommandFn);
 
     this.agents = [
       new ResearchAgent(this.registry, toolRegistry),
