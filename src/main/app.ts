@@ -191,9 +191,13 @@ export function createApiApp(): Express {
         }
 
         // 2. Prefer structured resolved state if exactly one clear answer exists
-        const resolvedUpdates = events.filter(e => 
-          e.event_type === 'blackboard_update' && e.metadata?.resolved === true
-        );
+        const resolvedUpdates = events.filter(e => {
+          if (e.event_type !== 'blackboard_update') return false;
+          try {
+            const meta = typeof e.metadata === 'string' ? JSON.parse(e.metadata) : e.metadata;
+            return meta?.resolved === true;
+          } catch { return false; }
+        });
         if (resolvedUpdates.length === 1) {
           return res.json({ final_response: resolvedUpdates[0].content });
         }

@@ -271,6 +271,7 @@ export const EVENT_TYPES = [
   'escalation_required',
   'code_written',
   'code_context_retrieved',
+  'blackboard_update',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -330,4 +331,5 @@ export interface OrchestratorResult {
 export interface OrchestratorTask {
   sessionId: string;
   message: string;  // the raw user text; no domain pre-classification needed
+  onProgress?: (event: string, data: any) => void;
 }

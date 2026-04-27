@@ -23,13 +23,6 @@ import {
   EventType,
 } from '../shared/types';
 
-// Add to your types or inline here:
-export interface OrchestratorTask {
-  sessionId: string;
-  message: string;
-  onProgress?: (event: string, data: any) => void;
-}
-
 const MAX_LOOPS = 6;
 
 const WINNER_CONFIDENCE_THRESHOLD = 0.30;
