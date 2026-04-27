@@ -37,5 +37,7 @@ beforeEach(() => {
     DELETE FROM system_logs;
     DELETE FROM research_sessions;
     DELETE FROM settings;
+    DELETE FROM blackboard_events;
+    DELETE FROM orchestrate_sessions;
   `);
 });
