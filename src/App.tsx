@@ -1,13 +1,10 @@
-import { useState } from 'react';
-import { Component, ErrorInfo, ReactNode } from 'react';
-import { motion } from 'motion/react';
-import { Terminal, Activity, Search, Layers, FileText, Cpu, ChevronLeft } from 'lucide-react';
+import { useState, Component, ErrorInfo, ReactNode } from 'react';
+import NavigationHub from './components/NavigationHub';
 import CoreTerminal from './components/CoreTerminal';
 import ROIDash from './components/ROIDash';
 import RoadmapView from './components/RoadmapView';
 import ResearchConsole from './components/ResearchConsole';
 import SystemLogs from './components/SystemLogs';
-import NavigationHub from './components/NavigationHub';
 
 // ── Error boundary ────────────────────────────────────────────────────────────
 
@@ -27,9 +24,13 @@ class RootErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundary
   render() {
     if (this.state.hasError) {
       return (
-        <div className="h-full flex flex-col items-center justify-center bg-panel gap-4 p-12 text-center">
-          <span className="text-[10px] font-bold text-red-500 uppercase tracking-[0.2em]">Console Crashed</span>
-          <p className="text-[10px] text-dim font-mono max-w-md leading-relaxed">{this.state.message}</p>
+        <div className="page" style={{ justifyContent: 'center', alignItems: 'center' }}>
+          <div style={{ textAlign: 'center', padding: 48 }}>
+            <span className="tag danger" style={{ marginBottom: 12, display: 'inline-block' }}>CONSOLE CRASHED</span>
+            <p className="mono" style={{ fontSize: 11, color: 'var(--text-2)', maxWidth: 480, lineHeight: 1.6 }}>
+              {this.state.message}
+            </p>
+          </div>
         </div>
       );
     }
@@ -37,93 +38,60 @@ class RootErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundary
   }
 }
 
-// ── View metadata ─────────────────────────────────────────────────────────────
-
-const VIEW_META: Record<string, { label: string; icon: React.ComponentType<{ size?: number }> }> = {
-  terminal: { label: 'AURA Terminal', icon: Terminal },
-  roi:      { label: 'ROI Dashboard', icon: Activity },
-  roadmap:  { label: 'Roadmap',       icon: Layers },
-  research: { label: 'Research Console', icon: Search },
-  logs:     { label: 'System Logs',   icon: FileText },
-};
-
 // ── App ───────────────────────────────────────────────────────────────────────
 
-export default function App() {
-  const [activeView, setActiveView] = useState<string | null>(null);
+type View = 'hub' | 'terminal' | 'roi' | 'roadmap' | 'research' | 'logs' | 'archive';
 
-  const meta = activeView ? VIEW_META[activeView] : null;
+const NAV: { key: View; n: string; label: string }[] = [
+  { key: 'hub',      n: '00', label: 'HUB' },
+  { key: 'terminal', n: '01', label: 'TERMINAL' },
+  { key: 'roadmap',  n: '02', label: 'ROADMAP' },
+  { key: 'research', n: '03', label: 'RESEARCH' },
+  { key: 'roi',      n: '04', label: 'ROI' },
+  { key: 'logs',     n: '05', label: 'LOGS' },
+];
+
+export default function App() {
+  const [view, setView] = useState<View>('hub');
 
   return (
-    <div className="app density-compact" style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
-      {/* HEADER */}
-      <header className="app-header" style={{ flexShrink: 0 }}>
-        <div className="app-header-title">
-          <span className="dot live" />
-          <b>AURA Shell</b>
-          {meta && (
-            <>
-              <span className="sep">·</span>
-              {meta.icon && <meta.icon size={10} />}
-              <span className="sub">{meta.label}</span>
-            </>
-          )}
-          {!meta && (
-            <>
-              <span className="sep">·</span>
-              <span className="sub">Minimal Autonomous Client</span>
-            </>
-          )}
+    <div className="app density-compact">
+      <header className="app-bar">
+        <div className="brand">
+          <span className="mark">Æ</span>
+          <span className="word">AURA<span className="slash">/</span>CODE</span>
         </div>
-        <div className="app-header-meta">
-          <span className="ver">v1.0.0</span>
+        <nav className="nav">
+          {NAV.map(n => (
+            <button
+              key={n.key}
+              className={`nav-item${view === n.key ? ' active' : ''}`}
+              onClick={() => setView(n.key)}
+            >
+              <span className="num">{n.n}</span>{n.label}
+            </button>
+          ))}
+        </nav>
+        <div className="meta">
+          <span><span className="dot live" /> LIVE</span>
         </div>
       </header>
 
-      {/* MAIN */}
-      <main className="app-main" style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
-        <RootErrorBoundary>
-          {activeView === null ? (
-            <NavigationHub onNavigate={setActiveView} />
-          ) : (
-            <>
-              {/* back button */}
-              <motion.button
-                className="hub-back-btn"
-                onClick={() => setActiveView(null)}
-                initial={{ opacity: 0, x: -8 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ duration: 0.2 }}
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-              >
-                <ChevronLeft size={11} />
-                Hub
-              </motion.button>
-
-              {activeView === 'terminal'  && <CoreTerminal />}
-              {activeView === 'roi'       && <ROIDash />}
-              {activeView === 'roadmap'   && <RoadmapView />}
-              {activeView === 'research'  && <ResearchConsole />}
-              {activeView === 'logs'      && <SystemLogs />}
-            </>
-          )}
-        </RootErrorBoundary>
-      </main>
-
-      {/* BOTTOM BAR */}
-      <footer className="app-bottom" style={{ flexShrink: 0 }}>
-        <div className="bb-seg">
-          <Cpu size={11} />
-          <span>System Active</span>
-        </div>
-        <div className="bb-seg">
-          <span className="api-status online">
-            <span className="dot ok" />
-            API ONLINE
-          </span>
-        </div>
-      </footer>
+      <RootErrorBoundary>
+        {view === 'hub'      && <NavigationHub onNavigate={(v) => setView(v as View)} />}
+        {view === 'terminal' && <CoreTerminal />}
+        {view === 'roi'      && <ROIDash />}
+        {view === 'roadmap'  && <RoadmapView />}
+        {view === 'research' && <ResearchConsole />}
+        {view === 'logs'     && <SystemLogs />}
+        {view === 'archive'  && (
+          <div className="page">
+            <div className="page-body">
+              <div className="empty"><div className="caps">ARCHIVE — COMING SOON</div></div>
+            </div>
+          </div>
+        )}
+      </RootErrorBoundary>
     </div>
   );
 }

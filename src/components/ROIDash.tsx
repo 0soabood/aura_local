@@ -1,196 +1,118 @@
-import { useState, useEffect } from 'react';
-import { TrendingUp, TrendingDown, Activity, CheckCircle2, Database, RefreshCw } from 'lucide-react';
-import { TelemetryMetrics } from '../shared/types';
+// src/components/ROIDash.tsx
+import { useEffect, useState } from 'react';
+import { motion } from 'motion/react';
+import { Activity, DollarSign, Gauge, Route } from 'lucide-react';
+import type { TelemetryMetricsV2 } from '../shared/types';
+import { Sparkline, Spinner, SectionNum } from './ui/atoms';
 
-const aura = (window as any).aura;
+const getAura = () => (window as any).aura;
 
-// static sparkline series for chart (live data overlaid when available)
-const SPARK_SERIES = [12, 18, 14, 22, 28, 24, 31, 27, 35, 32, 38, 41, 36, 44, 47];
-
-function Sparkline({ series }: { series: number[] }) {
-  const W = 600, H = 120;
-  const max = Math.max(...series);
-  const pts = series.map((v, i) => {
-    const x = (i / (series.length - 1)) * W;
-    const y = H - (v / max) * (H - 8) - 4;
-    return `${x},${y}`;
-  });
-  const polyPts = pts.join(' ');
-  const areaPath = `M0,${H} L${pts.join(' L')} L${W},${H} Z`;
-  return (
-    <svg className="chart-svg" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ height: 120 }}>
-      <defs>
-        <linearGradient id="sg" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.25" />
-          <stop offset="100%" stopColor="var(--accent)" stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      {[0.25, 0.5, 0.75].map(p => (
-        <line key={p} x1="0" x2={W} y1={H * p} y2={H * p} stroke="var(--border)" strokeDasharray="2 4" />
-      ))}
-      <path d={areaPath} fill="url(#sg)" />
-      <polyline points={polyPts} fill="none" stroke="var(--accent)" strokeWidth="1.5" />
-      {series.map((v, i) => {
-        const x = (i / (series.length - 1)) * W;
-        const y = H - (v / max) * (H - 8) - 4;
-        return <circle key={i} cx={x} cy={y} r="2" fill="var(--bg)" stroke="var(--accent)" strokeWidth="1" />;
-      })}
-    </svg>
-  );
-}
+interface KPI { label: string; value: string; unit?: string; delta: string; spark: number[]; accent: 'none' | 'chart' | 'oxblood'; Icon: any; }
 
 export default function ROIDash() {
-  const [stats, setStats] = useState<TelemetryMetrics | null>(null);
+  const [stats, setStats] = useState<TelemetryMetricsV2 | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const fetchStats = async () => {
+  const fetchData = async () => {
     setLoading(true);
-    try {
-      const data = await aura.getStats();
-      setStats(data);
-    } catch (err) {
-      console.error('[ROIDash] getStats:', err);
-    } finally {
-      setLoading(false);
-    }
+    try { setStats(await getAura().getStatsV2()); }
+    catch (err) { console.error('[ROIDash]', err); }
+    finally { setLoading(false); }
   };
+  useEffect(() => { fetchData(); }, []);
 
-  useEffect(() => { fetchStats(); }, []);
+  if (loading || !stats) return <div className="page"><div className="page-body"><Spinner /></div></div>;
 
-  // ── static display values (augmented by live stats when available) ─────────
-
-  const totalRoutes = stats?.totalValueSignal != null ? Math.round(stats.totalValueSignal) : 1041;
-  const avgLatency  = '1.84s';
-  const successRate = stats?.systemHealth != null ? `${stats.systemHealth.toFixed(1)}%` : '94.2%';
-  const tokenCost   = '$48.21';
-
-  const statCards = [
-    { label: 'TOTAL ROUTES',    val: totalRoutes.toLocaleString(), trend: '+12.4%', dir: 'up' as const,   icon: TrendingUp,   invert: false },
-    { label: 'AVG LATENCY',     val: avgLatency,                    trend: '−6.1%',  dir: 'down' as const, icon: Activity,     invert: true  },
-    { label: 'SUCCESS RATE',    val: successRate,                   trend: '+0.8%',  dir: 'up' as const,   icon: CheckCircle2, invert: false },
-    { label: 'EST. TOKEN COST', val: tokenCost,                     trend: '+2.3%',  dir: 'up' as const,   icon: Database,     invert: true  },
+  const kpis: KPI[] = [
+    { label: 'TOTAL ROUTES', value: stats.total_routes.toLocaleString(), delta: '+184', spark: [22,28,24,31,27,34,30,38,36,42,39,45,41,47,44,50,46,52,49,55,51,58,54,60], accent: 'none', Icon: Route },
+    { label: 'AVG LATENCY', value: (stats.avg_latency_ms/1000).toFixed(2), unit: 's', delta: '−0.12s', spark: stats.hourly_latency_ms, accent: 'chart', Icon: Gauge },
+    { label: 'SUCCESS RATE', value: (stats.success_rate*100).toFixed(1), unit: '%', delta: '+1.8pp', spark: [88,90,89,91,92,93,94.2], accent: 'none', Icon: Activity },
+    { label: 'EST. TOKEN COST', value: stats.est_token_cost_usd.toFixed(2), unit: '$', delta: '+$6.40', spark: stats.spend_series_usd, accent: 'oxblood', Icon: DollarSign },
   ];
 
-  const dist = [
-    { label: 'Orchestrator', val: stats?.executionVelocity ? Math.round(stats.executionVelocity * 1.5) : 412 },
-    { label: 'Code',         val: stats?.executionVelocity ? Math.round(stats.executionVelocity * 1.0) : 287 },
-    { label: 'Research',     val: stats?.researchDensity   ? Math.round(stats.researchDensity * 2)     : 198 },
-    { label: 'Synthesis',    val: 144 },
-  ];
-  const maxDist = Math.max(...dist.map(d => d.val));
-
-  const escalations = [
-    { t: '14:22:01', s: 'Scope ambiguity in redesign objective',         sev: 'warn'  },
-    { t: '11:08:44', s: 'Token budget exceeded — switched to haiku',     sev: 'warn'  },
-    { t: '09:51:17', s: 'Tool call timeout · ripgrep',                   sev: 'error' },
-    { t: 'yesterday', s: 'Manual override approved by user',             sev: 'info'  },
-  ];
-
-  if (loading && !stats) {
-    return (
-      <div className="page">
-        <div className="page-hd">
-          <div className="page-hd-title"><b>ROI · Telemetry</b><span>last 24h</span></div>
-        </div>
-        <div style={{ flex: 1, display: 'grid', placeItems: 'center', color: 'var(--text-4)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span className="spinner" />
-            <span style={{ fontSize: 'var(--fs-sm)' }}>loading telemetry…</span>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  const accentBg = (a: KPI['accent']) => a === 'chart' ? 'var(--chartreuse)' : a === 'oxblood' ? 'var(--oxblood)' : 'var(--card)';
+  const accentFg = (a: KPI['accent']) => a === 'oxblood' ? 'var(--bone)' : 'var(--ink)';
 
   return (
     <div className="page">
       <div className="page-hd">
-        <div className="page-hd-title"><b>ROI · Telemetry</b><span>last 24h</span></div>
-        <div className="page-hd-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--emerald)' }}>
-            <span className="dot ok" />tracking
-          </span>
-          <button
-            onClick={fetchStats}
-            style={{ color: 'var(--text-3)', display: 'flex', alignItems: 'center' }}
-            title="Refresh"
-          >
-            <RefreshCw size={11} className={loading ? 'spin' : ''} style={{ animation: loading ? 'spin 700ms linear infinite' : 'none' }} />
-          </button>
+        <div className="page-hd-title">
+          <SectionNum n="04" />
+          <b>R · O · I</b>
+          <span>return on instruction · last 24h</span>
+        </div>
+        <div className="page-hd-actions">
+          <span className="tag">LAST 24H</span>
+          <span className="tag verified">LIVE</span>
         </div>
       </div>
-
       <div className="page-body">
-        {/* STAT CARDS */}
-        <div className="roi-grid">
-          {statCards.map(s => {
-            const Icon = s.icon;
-            const trendDir = s.invert ? (s.dir === 'up' ? 'down' : 'up') : s.dir;
-            return (
-              <div key={s.label} className="roi-stat">
-                <div className="roi-stat-hd">
-                  <span>{s.label}</span>
-                  <Icon size={11} />
-                </div>
-                <div className="roi-stat-val">{s.val}</div>
-                <div className={`roi-stat-trend ${trendDir}`}>
-                  {trendDir === 'up' ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
-                  {s.trend} vs prev 24h
-                </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16 }}>
+          {kpis.map((k, i) => (
+            <motion.div key={k.label} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
+              style={{ border: '2px solid var(--rule)', background: accentBg(k.accent), color: k.accent === 'none' ? 'var(--text)' : accentFg(k.accent),
+                padding: 16, boxShadow: 'var(--shadow-hard-lg)' }}>
+              <div className="row" style={{ justifyContent: 'space-between' }}>
+                <span className="caps" style={{ opacity: 0.85 }}>{k.label}</span>
+                <k.Icon size={14} />
               </div>
-            );
-          })}
-        </div>
-
-        {/* CHARTS ROW */}
-        <div className="chart-row">
-          <div className="chart-card">
-            <div className="chart-hd">
-              <span>Routes / hour · 15h window</span>
-              <span style={{ color: 'var(--text-4)' }}>peak {Math.max(...SPARK_SERIES)}</span>
-            </div>
-            <Sparkline series={SPARK_SERIES} />
-          </div>
-
-          <div className="chart-card">
-            <div className="chart-hd">
-              <span>Route distribution</span>
-              <span style={{ color: 'var(--text-4)' }}>by agent</span>
-            </div>
-            {dist.map(d => (
-              <div key={d.label} className="bar-row">
-                <span className="bar-label">{d.label}</span>
-                <div className="bar-track">
-                  <div className="bar-fill" style={{ width: `${(d.val / maxDist) * 100}%` }} />
-                </div>
-                <span className="bar-val">{d.val}</span>
+              <div className="row" style={{ alignItems: 'baseline', gap: 4, marginTop: 10 }}>
+                {k.unit === '$' && <span className="display" style={{ fontSize: 24 }}>$</span>}
+                <span className="display" style={{ fontSize: 56, lineHeight: 0.9, letterSpacing: '-0.04em' }}>{k.value}</span>
+                {k.unit && k.unit !== '$' && <span className="display" style={{ fontSize: 24 }}>{k.unit}</span>}
               </div>
-            ))}
-          </div>
-        </div>
-
-        {/* ESCALATION LOG */}
-        <div className="chart-card">
-          <div className="chart-hd">
-            <span>Recent escalations</span>
-            <span style={{ color: 'var(--text-4)' }}>7d</span>
-          </div>
-          {escalations.map((r, i) => (
-            <div
-              key={i}
-              style={{
-                display: 'grid', gridTemplateColumns: '80px 60px 1fr', gap: 12,
-                padding: '4px 0', fontSize: 'var(--fs-sm)', borderBottom: '1px solid var(--border)',
-              }}
-            >
-              <span style={{ color: 'var(--text-4)' }}>{r.t}</span>
-              <span style={{
-                color: r.sev === 'error' ? 'var(--red)' : r.sev === 'warn' ? 'var(--amber)' : 'var(--text-3)',
-                textTransform: 'uppercase', fontSize: 'var(--fs-xs)', letterSpacing: '.08em',
-              }}>{r.sev}</span>
-              <span style={{ color: 'var(--text-2)' }}>{r.s}</span>
-            </div>
+              <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-end', marginTop: 10 }}>
+                <span className="mono" style={{ fontSize: 10 }}>Δ {k.delta}</span>
+                <Sparkline data={k.spark} w={80} h={22} stroke={1.5} />
+              </div>
+            </motion.div>
           ))}
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 20, marginTop: 24 }}>
+          <div style={{ border: '2px solid var(--rule)', background: 'var(--card)', padding: 18 }}>
+            <div className="row" style={{ justifyContent: 'space-between' }}>
+              <div className="display" style={{ fontSize: 22 }}>Latency, by the hour</div>
+              <span className="mono" style={{ fontSize: 10, color: 'var(--text-3)' }}>seconds · 24 buckets</span>
+            </div>
+            <div style={{ marginTop: 16, display: 'flex', alignItems: 'flex-end', gap: 4, height: 160, borderBottom: '2px solid var(--rule)', borderLeft: '2px solid var(--rule)', padding: '0 4px 0 6px' }}>
+              {stats.hourly_latency_ms.map((v, i) => (
+                <div key={i} style={{ flex: 1, height: `${(v / 3000) * 100}%`,
+                  background: i === stats.hourly_latency_ms.length - 1 ? 'var(--oxblood)' : 'var(--bone)',
+                  border: '1px solid var(--rule)' }} />
+              ))}
+            </div>
+            <div className="row" style={{ justifyContent: 'space-between', marginTop: 6 }}>
+              <span className="mono" style={{ fontSize: 9 }}>00h</span>
+              <span className="mono" style={{ fontSize: 9 }}>06h</span>
+              <span className="mono" style={{ fontSize: 9 }}>12h</span>
+              <span className="mono" style={{ fontSize: 9 }}>18h</span>
+              <span className="mono" style={{ fontSize: 9, color: 'var(--oxblood)', fontWeight: 700 }}>NOW · {(stats.avg_latency_ms/1000).toFixed(2)}s</span>
+            </div>
+          </div>
+          <div style={{ border: '2px solid var(--rule)', padding: 18, background: 'var(--paper)' }}>
+            <div className="caps">TOKEN BUDGET</div>
+            <div className="display" style={{ fontSize: 38, marginTop: 6, lineHeight: 1 }}>${stats.est_token_cost_usd.toFixed(2)}</div>
+            <div className="mono" style={{ fontSize: 10, color: 'var(--text-3)' }}>of $200.00 ceiling</div>
+            <div style={{ marginTop: 14, height: 22, border: '2px solid var(--rule)', position: 'relative', background: 'var(--card)' }}>
+              <div style={{ position: 'absolute', inset: 0, width: `${Math.min((stats.est_token_cost_usd / 200) * 100, 100)}%`, background: 'var(--oxblood)' }} />
+              <div style={{ position: 'absolute', inset: 0, backgroundImage: 'repeating-linear-gradient(to right, var(--rule) 0 1px, transparent 1px 20px)' }} />
+            </div>
+            <div className="row" style={{ justifyContent: 'space-between', marginTop: 4 }}>
+              <span className="mono" style={{ fontSize: 9 }}>$0</span>
+              <span className="mono" style={{ fontSize: 9 }}>$100</span>
+              <span className="mono" style={{ fontSize: 9 }}>$200</span>
+            </div>
+            <div style={{ marginTop: 16, paddingTop: 12, borderTop: '2px dashed var(--rule)' }}>
+              <div className="caps" style={{ marginBottom: 6 }}>TOP CONSUMERS</div>
+              {[['Design Sync', '$18.04'], ['Latency Test', '$12.91'], ['Token Burn', '$9.66']].map(([n, c]) => (
+                <div key={n} className="row" style={{ justifyContent: 'space-between', fontSize: 11, padding: '3px 0' }}>
+                  <span className="display" style={{ fontSize: 13 }}>{n}</span>
+                  <span className="mono">{c}</span>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
     </div>
