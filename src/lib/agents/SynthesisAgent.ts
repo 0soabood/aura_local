@@ -87,7 +87,12 @@ export class SynthesisAgent extends BaseAgent {
   }
 
   async execute(events: BlackboardEvent[], bid: AgentBid): Promise<AgentOutput> {
-    const agentOutputs = events.filter(e => e.event_type === 'agent_output' || e.event_type === 'code_written');
+    // Isolate current turn to determine mode correctly
+    const reversedUserMsgIdx = [...events].reverse().findIndex(e => e.event_type === 'user_message');
+    const lastUserMsgIdx = reversedUserMsgIdx >= 0 ? events.length - 1 - reversedUserMsgIdx : 0;
+    const currentTurnEvents = events.slice(lastUserMsgIdx);
+
+    const agentOutputs = currentTurnEvents.filter(e => e.event_type === 'agent_output' || e.event_type === 'code_written');
     const messages = this.buildMessages(events, SYSTEM_PROMPT);
 
     const model = this.getHealthyModel();
@@ -98,7 +103,7 @@ export class SynthesisAgent extends BaseAgent {
     const result = await this.registry.call(
       model,
       '',
-      { temperature: 0.3, messages },
+      { temperature: 0.0, messages },
     );
 
     if (result.rateLimited) {

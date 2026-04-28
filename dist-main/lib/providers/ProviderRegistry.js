@@ -21,6 +21,14 @@ const PROVIDER_CONFIGS = [
         format: 'openai',
     },
     {
+        id: 'vertex',
+        envKey: 'GOOGLE_CLOUD_PROJECT',
+        baseUrl: '',
+        defaultModel: 'gemini-2.5-flash',
+        rpm: 60,
+        format: 'vertex',
+    },
+    {
         id: 'google',
         envKey: 'GOOGLE_AI_STUDIO_API_KEY',
         baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
@@ -263,7 +271,7 @@ class ProviderRegistry {
         // Probe whether memory is present by checking for the SOUL section header,
         // which is a stable short string independent of the full memory length.
         const MEMORY_MARKER = '## AURA Identity (SOUL)';
-        const memoryPresent = systemMessages.some(m => m.content.includes(MEMORY_MARKER));
+        const memoryPresent = systemMessages.some(m => m.content?.includes(MEMORY_MARKER));
         const multipleSystemChannels = systemMessages.length > 1;
         console.log(`[LLM DEBUG] path=${path} ` +
             `messages=${messages.length} ` +
@@ -272,8 +280,9 @@ class ProviderRegistry {
             `memory_present=${memoryPresent} ` +
             `multiple_system_channels=${multipleSystemChannels}`);
         systemMessages.forEach((m, i) => {
-            console.log(`[LLM DEBUG] system[${i}] len=${m.content.length} ` +
-                `first120=${JSON.stringify(m.content.slice(0, 120))}`);
+            const c = m.content ?? '';
+            console.log(`[LLM DEBUG] system[${i}] len=${c.length} ` +
+                `first120=${JSON.stringify(c.slice(0, 120))}`);
         });
         if (multipleSystemChannels) {
             console.warn(`[LLM DEBUG] WARNING: ${path} has ${systemMessages.length} system messages — ` +

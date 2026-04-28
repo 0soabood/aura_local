@@ -2,22 +2,54 @@
 /**
  * UnifiedCaller — single HTTP call function for all supported provider APIs.
  *
- * Two wire formats:
- *   OpenAI-compatible  — POST /chat/completions, Bearer auth,
- *                        body: { model, messages, temperature, max_tokens }
- *                        response: choices[0].message.content
- *
- *   Google AI Studio   — POST models/{model}:generateContent?key=...,
- *                        body: { contents: [{ parts: [{ text }] }] }
- *                        response: candidates[0].content.parts[0].text
+ * Three wire formats:
+ *   openai   — POST /chat/completions, Bearer auth (Groq, Mistral, Cohere,
+ *              DeepSeek, OpenRouter all speak this dialect)
+ *   google   — POST models/{model}:generateContent?key=... (AI Studio)
+ *   vertex   — Google Vertex AI via @google/genai SDK using ADC / service
+ *              account (GOOGLE_APPLICATION_CREDENTIALS + GOOGLE_CLOUD_PROJECT)
  */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.callProvider = callProvider;
 async function callProvider(model, messages, opts) {
     const start = Date.now();
-    if (opts.format === 'google') {
+    if (opts.format === 'vertex')
+        return callVertex(model, messages, opts, start);
+    if (opts.format === 'google')
         return callGoogle(model, messages, opts, start);
-    }
     return callOpenAI(model, messages, opts, start);
 }
 // ── OpenAI-compatible ──────────────────────────────────────────────────────
@@ -44,18 +76,19 @@ async function callOpenAI(model, messages, opts, start) {
         }),
     });
     const latencyMs = Date.now() - start;
-    if (res.status === 429) {
+    if (res.status === 429 || res.status === 413) {
         const retryAfter = res.headers.get('retry-after');
         const retrySeconds = retryAfter ? parseInt(retryAfter, 10) : undefined;
         const validRetry = retrySeconds !== undefined && !isNaN(retrySeconds) ? retrySeconds : undefined;
+        const limitKind = res.status === 413 ? 'token limit exceeded' : 'rate limited';
         return {
             text: '', model, providerId: opts.providerId,
             tokensIn: 0, tokensOut: 0, latencyMs,
             rateLimited: true,
             retryAfterSeconds: validRetry,
             errorMessage: validRetry
-                ? `${opts.providerId} rate limited — retry after ${validRetry}s`
-                : `${opts.providerId} rate limited`,
+                ? `${opts.providerId} ${limitKind} — retry after ${validRetry}s`
+                : `${opts.providerId} ${limitKind}`,
         };
     }
     if (!res.ok) {
@@ -74,6 +107,93 @@ async function callOpenAI(model, messages, opts, start) {
         rateLimited: false,
         ...(toolCalls?.length ? { toolCalls } : {}),
     };
+}
+// ── Google Vertex AI (via @google/genai SDK + ADC) ─────────────────────────
+async function callVertex(model, messages, opts, start) {
+    // opts.apiKey carries GOOGLE_CLOUD_PROJECT; location comes from env.
+    const project = opts.apiKey;
+    const location = process.env.GOOGLE_CLOUD_LOCATION ?? 'us-central1';
+    // Dynamic import keeps the SDK out of the bundle for providers that don't use it.
+    const { GoogleGenAI } = await Promise.resolve().then(() => __importStar(require('@google/genai')));
+    const ai = new GoogleGenAI({ vertexai: true, project, location });
+    // Split system instructions from the conversation.
+    const systemMsg = messages.find(m => m.role === 'system')?.content ?? undefined;
+    const convMsgs = messages.filter(m => m.role !== 'system');
+    // Build Google-format contents array.
+    const contents = convMsgs.map(m => {
+        if (m.role === 'tool') {
+            // Tool result: find the matching tool name from prior assistant message.
+            return {
+                role: 'tool',
+                parts: [{ functionResponse: {
+                            name: m.tool_call_id ?? 'tool',
+                            response: { result: m.content ?? '' },
+                        } }],
+            };
+        }
+        if (m.role === 'assistant' && m.tool_calls?.length) {
+            // Assistant tool-call request.
+            return {
+                role: 'model',
+                parts: m.tool_calls.map(tc => ({
+                    functionCall: {
+                        name: tc.function.name,
+                        args: (() => { try {
+                            return JSON.parse(tc.function.arguments);
+                        }
+                        catch {
+                            return {};
+                        } })(),
+                    },
+                })),
+            };
+        }
+        return {
+            role: m.role === 'assistant' ? 'model' : 'user',
+            parts: [{ text: m.content ?? '' }],
+        };
+    });
+    // Convert OpenAI tool definitions to Google function declarations.
+    const googleTools = opts.tools?.length
+        ? [{ functionDeclarations: opts.tools.map((t) => t.function ?? t) }]
+        : undefined;
+    try {
+        const response = await ai.models.generateContent({
+            model,
+            contents: contents.length === 1 ? (contents[0].parts?.[0]?.text ?? contents) : contents,
+            config: {
+                ...(systemMsg ? { systemInstruction: systemMsg } : {}),
+                temperature: opts.temperature ?? 0.2,
+                ...(opts.maxTokens ? { maxOutputTokens: opts.maxTokens } : {}),
+                ...(googleTools ? { tools: googleTools } : {}),
+            },
+        });
+        return {
+            text: response.text ?? '',
+            model,
+            providerId: opts.providerId,
+            tokensIn: response.usageMetadata?.promptTokenCount ?? 0,
+            tokensOut: response.usageMetadata?.candidatesTokenCount ?? 0,
+            latencyMs: Date.now() - start,
+            rateLimited: false,
+        };
+    }
+    catch (err) {
+        const latencyMs = Date.now() - start;
+        const is429 = err?.status === 429 || err?.code === 429 ||
+            (typeof err?.message === 'string' && err.message.includes('RESOURCE_EXHAUSTED'));
+        const is413 = err?.status === 413 || err?.code === 413 ||
+            (typeof err?.message === 'string' && err.message.includes('Request payload size exceeds'));
+        if (is429 || is413) {
+            return {
+                text: '', model, providerId: opts.providerId,
+                tokensIn: 0, tokensOut: 0, latencyMs,
+                rateLimited: true,
+                errorMessage: `vertex ${is413 ? 'token limit exceeded' : 'rate limited'}`,
+            };
+        }
+        throw err;
+    }
 }
 // ── Google AI Studio ───────────────────────────────────────────────────────
 async function callGoogle(model, messages, opts, start) {
@@ -98,18 +218,19 @@ async function callGoogle(model, messages, opts, start) {
         }),
     });
     const latencyMs = Date.now() - start;
-    if (res.status === 429) {
+    if (res.status === 429 || res.status === 413) {
         const retryAfter = res.headers.get('retry-after');
         const retrySeconds = retryAfter ? parseInt(retryAfter, 10) : undefined;
         const validRetry = retrySeconds !== undefined && !isNaN(retrySeconds) ? retrySeconds : undefined;
+        const limitKind = res.status === 413 ? 'token limit exceeded' : 'rate limited';
         return {
             text: '', model, providerId: opts.providerId,
             tokensIn: 0, tokensOut: 0, latencyMs,
             rateLimited: true,
             retryAfterSeconds: validRetry,
             errorMessage: validRetry
-                ? `google rate limited — retry after ${validRetry}s`
-                : 'google rate limited',
+                ? `google ${limitKind} — retry after ${validRetry}s`
+                : `google ${limitKind}`,
         };
     }
     if (!res.ok) {

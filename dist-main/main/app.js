@@ -6,6 +6,39 @@
  * without booting the Vite middleware or binding to a port. The bootstrap
  * in index.ts wraps this with the dev-server middleware + listen call.
  */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -13,6 +46,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.createApiApp = createApiApp;
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
+const fs = __importStar(require("fs"));
+const path = __importStar(require("path"));
 const SystemLogRepository_1 = require("../db/repositories/SystemLogRepository");
 const SnippetRepository_1 = require("../db/repositories/SnippetRepository");
 const RoadmapRepository_1 = require("../db/repositories/RoadmapRepository");
@@ -26,6 +61,21 @@ const SupervisorRouter_1 = require("../lib/SupervisorRouter");
 const prompts_1 = require("../lib/supervisors/prompts");
 const ReactiveOrchestrator_1 = require("../lib/ReactiveOrchestrator");
 const loader_1 = require("../lib/memory/loader");
+const write_memory_1 = require("../lib/tools/builtin/write_memory");
+/** Parse a query param integer, clamped to [min, max]. Returns null if the value is present but not a valid integer. */
+function parseLimitParam(val, defaultVal = 100, min = 1, max = 500) {
+    if (val === undefined || val === '')
+        return defaultVal;
+    const n = parseInt(val, 10);
+    if (isNaN(n))
+        return null;
+    return Math.max(min, Math.min(max, n));
+}
+/** Parse a numeric ID param. Returns null if not a valid integer. */
+function parseIdParam(val) {
+    const n = parseInt(val, 10);
+    return isNaN(n) ? null : n;
+}
 function createApiApp() {
     const supervisorRouter = new SupervisorRouter_1.SupervisorRouter();
     const reactiveOrchestrator = new ReactiveOrchestrator_1.ReactiveOrchestrator();
@@ -34,7 +84,9 @@ function createApiApp() {
     app.use(express_1.default.json());
     // ── Model Runs ──────────────────────────────────────────────────────────
     app.get('/api/model-runs', (req, res) => {
-        const limit = req.query.limit ? parseInt(req.query.limit) : 100;
+        const limit = parseLimitParam(req.query.limit);
+        if (limit === null)
+            return res.status(400).json({ error: '`limit` must be a positive integer' });
         res.json(ModelRunRepository_1.ModelRunRepository.list(limit));
     });
     app.post('/api/model-runs', (req, res) => {
@@ -58,11 +110,16 @@ function createApiApp() {
     });
     // ── System Logs ─────────────────────────────────────────────────────────
     app.get('/api/logs', (req, res) => {
-        const limit = req.query.limit ? parseInt(req.query.limit) : 100;
+        const limit = parseLimitParam(req.query.limit);
+        if (limit === null)
+            return res.status(400).json({ error: '`limit` must be a positive integer' });
         res.json(SystemLogRepository_1.SystemLogRepository.list(limit));
     });
     app.get('/api/logs/:id', (req, res) => {
-        const log = SystemLogRepository_1.SystemLogRepository.findById(parseInt(req.params.id));
+        const id = parseIdParam(req.params.id);
+        if (id === null)
+            return res.status(400).json({ error: 'invalid id' });
+        const log = SystemLogRepository_1.SystemLogRepository.findById(id);
         if (log)
             res.json(log);
         else
@@ -74,12 +131,21 @@ function createApiApp() {
         res.status(201).json({ status: 'logged' });
     });
     app.delete('/api/logs/:id', (req, res) => {
-        SystemLogRepository_1.SystemLogRepository.delete(parseInt(req.params.id));
+        const id = parseIdParam(req.params.id);
+        if (id === null)
+            return res.status(400).json({ error: 'invalid id' });
+        SystemLogRepository_1.SystemLogRepository.delete(id);
         res.sendStatus(204);
     });
     // ── Roadmap (via Service for transactions/audit) ────────────────────────
     app.post('/api/roadmap', async (req, res) => {
         const { title, description, priority, roi_score, lane } = req.body;
+        if (!title || typeof title !== 'string' || title.trim().length === 0) {
+            return res.status(400).json({ error: '`title` is required' });
+        }
+        if (title.length > 500) {
+            return res.status(400).json({ error: '`title` must be 500 characters or fewer' });
+        }
         const result = await AuraService_1.AuraService.createRoadmapMilestone(title, description, priority, roi_score, lane);
         res.status(201).json(result);
     });
@@ -105,6 +171,12 @@ function createApiApp() {
     });
     app.post('/api/snippets', (req, res) => {
         const { title, content, tags, source_url } = req.body;
+        if (!title || typeof title !== 'string' || title.trim().length === 0) {
+            return res.status(400).json({ error: '`title` is required' });
+        }
+        if (content && typeof content === 'string' && content.length > 50_000) {
+            return res.status(400).json({ error: '`content` must be 50,000 characters or fewer' });
+        }
         const id = crypto.randomUUID();
         SnippetRepository_1.SnippetRepository.create({ id, title, content, tags, source_url });
         res.status(201).json({ id });
@@ -140,7 +212,17 @@ function createApiApp() {
                     return res.json({ final_response: terminal.content });
                 }
                 // 2. Prefer structured resolved state if exactly one clear answer exists
-                const resolvedUpdates = events.filter(e => e.event_type === 'blackboard_update' && e.metadata?.resolved === true);
+                const resolvedUpdates = events.filter(e => {
+                    if (e.event_type !== 'blackboard_update')
+                        return false;
+                    try {
+                        const meta = typeof e.metadata === 'string' ? JSON.parse(e.metadata) : e.metadata;
+                        return meta?.resolved === true;
+                    }
+                    catch {
+                        return false;
+                    }
+                });
                 if (resolvedUpdates.length === 1) {
                     return res.json({ final_response: resolvedUpdates[0].content });
                 }
@@ -218,6 +300,8 @@ function createApiApp() {
             const { message, sessionId } = req.body;
             if (!message?.trim())
                 return res.status(400).json({ error: '`message` is required' });
+            if (message.length > 10_000)
+                return res.status(400).json({ error: '`message` must be 10,000 characters or fewer' });
             resolvedSessionId = sessionId || crypto.randomUUID();
             if (inFlight.has(resolvedSessionId)) {
                 return res.status(409).json({ error: 'Session already in progress', session_id: resolvedSessionId });
@@ -308,6 +392,54 @@ function createApiApp() {
         catch (err) {
             console.error('[AURA MEMORY] Hot-reload failed:', err.message);
             res.status(500).json({ success: false, error: err.message });
+        }
+    });
+    // ── Memory file read/write ────────────────────────────────────────────────
+    app.get('/api/aura-roadmap', (_req, res) => {
+        try {
+            const roadmapPath = path.resolve(process.cwd(), 'AURA.md');
+            const content = fs.existsSync(roadmapPath)
+                ? fs.readFileSync(roadmapPath, 'utf-8')
+                : '# AURA.md not found\n\nCreate AURA.md in the project root.';
+            res.json({ content });
+        }
+        catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    const MEMORY_FILE_ALLOWLIST = ['SOUL', 'USER', 'AGENTS'];
+    app.get('/api/memory/:file', (req, res) => {
+        const file = req.params.file?.toUpperCase();
+        if (!MEMORY_FILE_ALLOWLIST.includes(file)) {
+            return res.status(400).json({ error: `Invalid memory file. Allowed: ${MEMORY_FILE_ALLOWLIST.join(', ')}` });
+        }
+        try {
+            const mem = (0, loader_1.getAuraMemory)();
+            const content = file === 'SOUL' ? mem.soul : file === 'USER' ? mem.user : mem.agents;
+            res.json({ file, content });
+        }
+        catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    app.put('/api/memory/:file', async (req, res) => {
+        const file = req.params.file?.toUpperCase();
+        if (!MEMORY_FILE_ALLOWLIST.includes(file)) {
+            return res.status(400).json({ error: `Invalid memory file. Allowed: ${MEMORY_FILE_ALLOWLIST.join(', ')}` });
+        }
+        const { content } = req.body;
+        if (typeof content !== 'string' || !content.trim()) {
+            return res.status(400).json({ error: 'content is required and must be a non-empty string.' });
+        }
+        if (content.length > 50_000) {
+            return res.status(400).json({ error: 'content exceeds maximum length of 50,000 characters.' });
+        }
+        try {
+            await (0, write_memory_1.writeMemoryFn)({ file, content });
+            res.json({ success: true, file, updatedAt: new Date().toISOString() });
+        }
+        catch (err) {
+            res.status(500).json({ error: err.message });
         }
     });
     // Error-handling middleware (4-arg) — must be registered after the routes.

@@ -2,14 +2,16 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.BaseAgent = void 0;
 const prompts_1 = require("../supervisors/prompts");
+const MAX_REACT_STEPS = 5;
 /** All concrete agents receive the shared registry at construction time. */
 class BaseAgent {
-    constructor(registry) {
+    constructor(registry, toolRegistry) {
         this.registry = registry;
+        this.toolRegistry = toolRegistry;
     }
     /** Find the first user_message in the log. */
     userMessage(events) {
-        return events.find(e => e.event_type === 'user_message')?.content ?? '';
+        return [...events].reverse().find(e => e.event_type === 'user_message')?.content ?? '';
     }
     /** Collect content strings from agent_output events by a specific author. */
     outputsBy(events, author) {
@@ -35,22 +37,27 @@ class BaseAgent {
      * The caller's systemPrompt is injected first so it governs the entire turn.
      */
     buildMessages(events, systemPrompt) {
-        const ASSISTANT_EVENTS = new Set([
-            'agent_output', 'code_written', 'code_context_retrieved', 'synthesis_complete',
-        ]);
+        // Find where the current turn starts
+        const reversedUserMsgIdx = [...events].reverse().findIndex(e => e.event_type === 'user_message');
+        const lastUserMsgIdx = reversedUserMsgIdx >= 0 ? events.length - 1 - reversedUserMsgIdx : 0;
         // assembleSystemPrompt() is the single authority channel: memory first, then
         // the agent-specific base prompt.  One system message, deterministic order.
         const messages = [
             { role: 'system', content: (0, prompts_1.assembleSystemPrompt)(systemPrompt) },
         ];
-        for (const e of events) {
+        for (let i = 0; i < events.length; i++) {
+            const e = events[i];
+            const isCurrentTurn = i >= lastUserMsgIdx;
             if (e.event_type === 'user_message') {
                 messages.push({ role: 'user', content: e.content });
             }
-            else if (ASSISTANT_EVENTS.has(e.event_type)) {
+            else if (e.event_type === 'synthesis_complete') {
+                messages.push({ role: 'assistant', content: e.content });
+            }
+            else if (isCurrentTurn && (e.event_type === 'agent_output' || e.event_type === 'code_written' || e.event_type === 'code_context_retrieved')) {
                 messages.push({ role: 'assistant', content: `[${e.author}]: ${e.content}` });
             }
-            else if (e.event_type === 'execution_error') {
+            else if (isCurrentTurn && e.event_type === 'execution_error') {
                 messages.push({ role: 'user', content: `[system — execution error from ${e.author}]: ${e.content}` });
             }
             // escalation_required and orchestrator meta-events are intentionally skipped.
@@ -58,12 +65,12 @@ class BaseAgent {
         return messages;
     }
     /**
-     * Returns false when the provider for the given routing string is not
-     * registered, preventing a dead provider from winning a bid.
+     * Returns true only when the provider is registered AND has an API key set.
+     * Uses getAvailableProviders() which filters by env key presence.
      */
     isProviderHealthy(routing) {
         const providerId = routing.includes(':') ? routing.slice(0, routing.indexOf(':')) : routing;
-        return this.registry.listProviders().includes(providerId);
+        return this.registry.getAvailableProviders().some(cfg => cfg.id === providerId);
     }
     /**
      * True if the last `n` recorded attempts (successes + errors) by `agentName`
@@ -85,6 +92,98 @@ class BaseAgent {
         });
         const tail = attempts.slice(-n);
         return tail.length === n && tail.every(e => e.event_type === 'execution_error');
+    }
+    /**
+     * Bounded ReAct loop: Reason → Act → Observe, up to MAX_REACT_STEPS times.
+     *
+     * On each step the LLM is called with the current message history and the
+     * provided tool definitions. If the LLM produces tool calls, each is
+     * executed via the registry and the results are appended to the conversation
+     * before the next step. The loop exits when the LLM produces a response with
+     * no tool calls, or when MAX_REACT_STEPS is reached (forcing a final answer).
+     *
+     * Tool results are injected in the OpenAI tool-message format so that
+     * OpenAI-compatible providers (Groq, OpenRouter, etc.) maintain a valid
+     * conversation structure; other providers handle them as text.
+     */
+    async runReactLoop(messages, model, toolDefs, toolRegistry, opts = {}) {
+        const localMessages = [...messages];
+        let totalTokensIn = 0;
+        let totalTokensOut = 0;
+        let totalLatency = 0;
+        let lastModel = model;
+        for (let step = 0; step < MAX_REACT_STEPS; step++) {
+            let result = await this.registry.call(model, '', {
+                temperature: opts.temperature,
+                messages: localMessages,
+                tools: toolDefs.length ? toolDefs : undefined,
+            });
+            if (result.rateLimited) {
+                // Primary provider can't handle this request (rate limit or token size).
+                // Try all other available providers in load-sorted order.
+                const fallback = await this.registry.callWithFallback('', {
+                    temperature: opts.temperature,
+                    messages: localMessages,
+                    tools: toolDefs.length ? toolDefs : undefined,
+                });
+                if (!fallback.rateLimited && fallback.text) {
+                    result = fallback;
+                }
+                else {
+                    throw new Error(`[${model}] token/rate limit exceeded and all fallbacks failed: ` +
+                        (result.errorMessage ?? fallback.errorMessage ?? 'no providers available'));
+                }
+            }
+            totalTokensIn += result.tokensIn;
+            totalTokensOut += result.tokensOut;
+            totalLatency += result.latencyMs;
+            lastModel = result.model;
+            if (!result.toolCalls?.length) {
+                return {
+                    content: result.text,
+                    model: lastModel,
+                    latencyMs: totalLatency,
+                    tokensIn: totalTokensIn,
+                    tokensOut: totalTokensOut,
+                };
+            }
+            // Append the assistant's tool-call intent (preserves OpenAI protocol).
+            localMessages.push({
+                role: 'assistant',
+                content: '',
+                tool_calls: result.toolCalls,
+            });
+            // Execute each tool call and append the result as a tool message.
+            for (const tc of result.toolCalls) {
+                let toolArgs;
+                try {
+                    toolArgs = typeof tc.function.arguments === 'string'
+                        ? JSON.parse(tc.function.arguments)
+                        : (tc.function.arguments ?? {});
+                }
+                catch {
+                    toolArgs = {};
+                }
+                const toolResult = await toolRegistry.execute({
+                    id: tc.id ?? `tool_${step}_${tc.function?.name}`,
+                    name: tc.function?.name,
+                    arguments: toolArgs,
+                });
+                localMessages.push({
+                    role: 'tool',
+                    content: String(toolResult),
+                    tool_call_id: tc.id ?? `tool_${step}_${tc.function?.name}`,
+                    name: tc.function?.name,
+                });
+            }
+        }
+        return {
+            content: '',
+            model: lastModel,
+            latencyMs: totalLatency,
+            tokensIn: totalTokensIn,
+            tokensOut: totalTokensOut,
+        };
     }
 }
 exports.BaseAgent = BaseAgent;

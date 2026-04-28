@@ -2,6 +2,8 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SynthesisAgent = void 0;
 const types_1 = require("./types");
+const write_memory_1 = require("../tools/builtin/write_memory");
+const registry_1 = require("../tools/registry");
 const SYNTHESIS_MODELS = [
     'anthropic:claude-3-5-sonnet-latest',
     'openai:gpt-4o',
@@ -72,13 +74,17 @@ class SynthesisAgent extends types_1.BaseAgent {
         return this.bid(0, 'deferring to specialist agents');
     }
     async execute(events, bid) {
-        const agentOutputs = events.filter(e => e.event_type === 'agent_output' || e.event_type === 'code_written');
+        // Isolate current turn to determine mode correctly
+        const reversedUserMsgIdx = [...events].reverse().findIndex(e => e.event_type === 'user_message');
+        const lastUserMsgIdx = reversedUserMsgIdx >= 0 ? events.length - 1 - reversedUserMsgIdx : 0;
+        const currentTurnEvents = events.slice(lastUserMsgIdx);
+        const agentOutputs = currentTurnEvents.filter(e => e.event_type === 'agent_output' || e.event_type === 'code_written');
         const messages = this.buildMessages(events, SYSTEM_PROMPT);
         const model = this.getHealthyModel();
         if (!model) {
             throw new Error('No healthy synthesis provider available.');
         }
-        const result = await this.registry.call(model, '', { temperature: 0.3, messages });
+        const result = await this.registry.call(model, '', { temperature: 0.0, messages });
         if (result.rateLimited) {
             const retryHint = result.retryAfterSeconds
                 ? ` Please wait ${result.retryAfterSeconds}s before retrying.`
@@ -86,9 +92,9 @@ class SynthesisAgent extends types_1.BaseAgent {
             return {
                 event_type: 'escalation_required',
                 content: JSON.stringify({
-                    reason: result.errorMessage ?? 'Gemini API rate limit exceeded.',
-                    actionable: `The Gemini free-tier quota is exhausted.${retryHint} ` +
-                        'To continue, wait for the quota window to reset or configure a paid API key.',
+                    reason: result.errorMessage ?? 'Synthesis API rate limit exceeded.',
+                    actionable: `The API quota is exhausted.${retryHint} ` +
+                        'Wait for the quota window to reset or configure a paid API key.',
                 }),
                 metadata: {
                     model_id: result.model,
@@ -98,14 +104,31 @@ class SynthesisAgent extends types_1.BaseAgent {
                 },
             };
         }
+        // Persist a one-sentence summary to USER.md — best-effort, never crashes synthesis.
+        const memReg = this.toolRegistry ?? new registry_1.ToolRegistry();
+        if (!memReg.has('write_memory'))
+            memReg.register(write_memory_1.writeMemoryDef, write_memory_1.writeMemoryFn);
+        const summary = result.text.slice(0, 200).replace(/\n/g, ' ').trim();
+        if (summary) {
+            memReg.execute({
+                id: 'synthesis_memory',
+                name: 'write_memory',
+                arguments: {
+                    file: 'USER',
+                    content: `Session summary (${new Date().toISOString().slice(0, 10)}): ${summary}`,
+                },
+            }).catch(() => { });
+        }
         return {
-            event_type: 'synthesis_complete', // always terminal
+            event_type: 'synthesis_complete',
             content: result.text,
             metadata: {
                 model_id: result.model,
                 latency_ms: result.latencyMs,
                 confidence: bid.confidence,
                 mode: agentOutputs.length > 0 ? 'synthesis' : 'conversational',
+                tokens_in: result.tokensIn,
+                tokens_out: result.tokensOut,
             },
         };
     }

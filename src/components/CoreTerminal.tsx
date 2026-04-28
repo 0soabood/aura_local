@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Terminal, Send, ChevronsRight, ChevronsLeft, AlertTriangle } from 'lucide-react';
+import { Terminal, Send, ChevronsRight, ChevronsLeft, AlertTriangle, History, Plus } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { BlackboardEvent, OrchestrateResponse } from '../shared/types';
 
@@ -66,6 +66,11 @@ interface DebugData {
   termination: string;
 }
 
+interface Session {
+  id: string;
+  updated_at: string;
+}
+
 export default function CoreTerminal() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -76,11 +81,53 @@ export default function CoreTerminal() {
   const [debugOpen, setDebugOpen] = useState(false);
   const [debugData, setDebugData] = useState<DebugData>({ events: [], latency: 0, loops: 0, termination: 'none' });
 
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+
   const feedRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (feedRef.current) feedRef.current.scrollTop = feedRef.current.scrollHeight;
   }, [messages, status]);
+
+  const loadSessions = async () => {
+    try {
+      const data = getAura().listSessions ? await getAura().listSessions() : [];
+      setSessions(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Failed to load sessions:', err);
+    }
+  };
+
+  useEffect(() => {
+    loadSessions();
+  }, []);
+
+  const selectSession = async (id: string) => {
+    setActiveId(id);
+    setStatus('idle');
+    setMessages([]);
+    try {
+      const events: BlackboardEvent[] = await getAura().getSessionEvents(id);
+      const loadedMessages = events
+        .filter(e => e.event_type === 'user_message' || e.event_type === 'synthesis_complete' || e.event_type === 'escalation_required')
+        .map(e => ({
+          id: e.id.toString(),
+          role: e.event_type === 'user_message' ? 'user' : (e.event_type === 'escalation_required' ? 'error' : ('assistant' as const)),
+          content: e.event_type === 'escalation_required' ? (JSON.parse(e.content).reason || e.content) : e.content
+        }));
+      setMessages(loadedMessages);
+    } catch (err) {
+      console.error('Failed to load session events:', err);
+    }
+  };
+
+  const newSession = () => {
+    setActiveId(null);
+    setMessages([]);
+    setStatus('idle');
+    setDebugData({ events: [], latency: 0, loops: 0, termination: 'none' });
+  };
 
   const route = async () => {
     const text = input.trim();
@@ -108,6 +155,7 @@ export default function CoreTerminal() {
               events: data.events || [], latency: data.totalLatencyMs, loops: data.totalLoops, termination: data.terminationReason
             });
             setStatus('complete');
+            loadSessions();
           } else if (eventType === 'error') {
             setMessages(prev => [...prev, { 
               id: crypto.randomUUID(), role: 'error', content: data.message || 'Orchestration error' 
@@ -138,8 +186,65 @@ export default function CoreTerminal() {
   );
 
   return (
-    <div className={`terminal ${!debugOpen ? 'right-collapsed' : ''}`} style={{ display: 'flex', height: '100%', width: '100%' }}>
+    <div className={`terminal ${!debugOpen ? 'right-collapsed' : ''} ${!historyOpen ? 'left-collapsed' : ''}`} style={{ display: 'flex', height: '100%', width: '100%' }}>
       
+      {/* HISTORY DRAWER */}
+      {!historyOpen ? (
+        <div 
+          onClick={() => { setHistoryOpen(true); loadSessions(); }} 
+          style={{ width: '40px', borderRight: '1px solid var(--border-1)', background: 'var(--bg-2)', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '16px 0', cursor: 'pointer' }}
+          title="Expand History"
+        >
+          <History size={16} color="var(--text-3)" />
+          <div style={{ writingMode: 'vertical-rl', marginTop: '24px', fontSize: '11px', color: 'var(--text-3)', letterSpacing: '1px' }}>
+            HISTORY
+          </div>
+        </div>
+      ) : (
+        <aside style={{ width: '250px', borderRight: '1px solid var(--border-1)', background: 'var(--bg-1)', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-1)' }}>Sessions</span>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button onClick={newSession} style={{ background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer' }} title="New Session">
+                <Plus size={16} />
+              </button>
+              <button onClick={() => setHistoryOpen(false)} style={{ background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer' }}>
+                <ChevronsLeft size={16} />
+              </button>
+            </div>
+          </div>
+          
+          <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
+            {sessions.length === 0 ? (
+              <div style={{ color: 'var(--text-4)', fontSize: '11px', textAlign: 'center', padding: '16px' }}>No history.</div>
+            ) : (
+              sessions.map(s => (
+                <div 
+                  key={s.id} 
+                  onClick={() => selectSession(s.id)}
+                  style={{ 
+                    padding: '10px', 
+                    marginBottom: '4px', 
+                    borderRadius: '4px', 
+                    background: activeId === s.id ? 'var(--bg-2)' : 'transparent',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    color: activeId === s.id ? 'var(--text-1)' : 'var(--text-3)'
+                  }}
+                >
+                  <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    Session {s.id.slice(0, 8)}
+                  </div>
+                  <div style={{ fontSize: '10px', color: 'var(--text-4)', marginTop: '4px' }}>
+                    {new Date(s.updated_at).toLocaleString()}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </aside>
+      )}
+
       {/* MAIN FEED */}
       <section className="feed" style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative' }}>
         <div className="feed-stream" ref={feedRef} style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>

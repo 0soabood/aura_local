@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.CODE_CONTEXT_TOOLS = void 0;
+exports.searchCodebaseFn = exports.searchCodebaseDef = exports.getFileSkeletonFn = exports.getFileSkeletonDef = exports.CODE_CONTEXT_TOOLS = void 0;
 exports.executeContextTool = executeContextTool;
 const path = __importStar(require("path"));
 const SkeletonExtractor_1 = require("./SkeletonExtractor");
@@ -101,6 +101,76 @@ exports.CODE_CONTEXT_TOOLS = [
         },
     },
 ];
+// ToolDefinition-compatible exports for ToolRegistry integration.
+exports.getFileSkeletonDef = {
+    type: 'function',
+    function: {
+        name: 'get_file_skeleton',
+        description: 'Returns the structural skeleton of a TypeScript/JavaScript file — imports, ' +
+            'class/interface/type definitions, and function signatures — with implementation bodies stripped out. ' +
+            'IMPORTANT: filePath must be a real path found via search_codebase. Never pass placeholder paths.',
+        parameters: {
+            type: 'object',
+            properties: {
+                filePath: {
+                    type: 'string',
+                    description: 'Absolute or relative path to an existing source file in this project.',
+                },
+            },
+            required: ['filePath'],
+            additionalProperties: false,
+        },
+    },
+};
+const getFileSkeletonFn = async (args) => {
+    const validation = validateFilePath(args.filePath);
+    if ('error' in validation)
+        return validation.error;
+    try {
+        return await SkeletonExtractor_1.SkeletonExtractor.getFileSkeleton(validation.resolved);
+    }
+    catch (err) {
+        return `Error: Could not read file "${args.filePath}": ${err.message}`;
+    }
+};
+exports.getFileSkeletonFn = getFileSkeletonFn;
+exports.searchCodebaseDef = {
+    type: 'function',
+    function: {
+        name: 'search_codebase',
+        description: 'Recursively searches the codebase for lines matching a regex/string query. ' +
+            'Returns up to 50 results in the format "filePath:lineNumber: matchedLine". ' +
+            'Use this to discover real file paths before calling get_file_skeleton.',
+        parameters: {
+            type: 'object',
+            properties: {
+                query: {
+                    type: 'string',
+                    description: 'Regex pattern or literal string to search for.',
+                },
+                dir: {
+                    type: 'string',
+                    description: 'Directory to search in. Defaults to "src".',
+                },
+            },
+            required: ['query'],
+            additionalProperties: false,
+        },
+    },
+};
+const searchCodebaseFn = async (args) => {
+    if (!args.query || typeof args.query !== 'string') {
+        return 'Error: search_codebase requires a non-empty query string.';
+    }
+    const dir = typeof args.dir === 'string' ? args.dir : 'src';
+    try {
+        return await SkeletonExtractor_1.SkeletonExtractor.searchCodebase(args.query, dir);
+    }
+    catch (err) {
+        return `Error: search_codebase failed: ${err.message}`;
+    }
+};
+exports.searchCodebaseFn = searchCodebaseFn;
 async function executeContextTool(name, args) {
     switch (name) {
         case 'get_file_skeleton': {
