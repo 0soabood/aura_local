@@ -74,13 +74,17 @@ class SynthesisAgent extends types_1.BaseAgent {
         return this.bid(0, 'deferring to specialist agents');
     }
     async execute(events, bid) {
-        const agentOutputs = events.filter(e => e.event_type === 'agent_output' || e.event_type === 'code_written');
+        // Isolate current turn to determine mode correctly
+        const reversedUserMsgIdx = [...events].reverse().findIndex(e => e.event_type === 'user_message');
+        const lastUserMsgIdx = reversedUserMsgIdx >= 0 ? events.length - 1 - reversedUserMsgIdx : 0;
+        const currentTurnEvents = events.slice(lastUserMsgIdx);
+        const agentOutputs = currentTurnEvents.filter(e => e.event_type === 'agent_output' || e.event_type === 'code_written');
         const messages = this.buildMessages(events, SYSTEM_PROMPT);
         const model = this.getHealthyModel();
         if (!model) {
             throw new Error('No healthy synthesis provider available.');
         }
-        const result = await this.registry.call(model, '', { temperature: 0.3, messages });
+        const result = await this.registry.call(model, '', { temperature: 0.0, messages });
         if (result.rateLimited) {
             const retryHint = result.retryAfterSeconds
                 ? ` Please wait ${result.retryAfterSeconds}s before retrying.`

@@ -15,6 +15,8 @@ const edit_file_1 = require("./tools/builtin/edit_file");
 const run_command_1 = require("./tools/builtin/run_command");
 const BlackboardEventRepository_1 = require("../db/repositories/BlackboardEventRepository");
 const prompts_1 = require("./supervisors/prompts");
+const workflow_1 = require("./graph/workflow");
+const messages_1 = require("@langchain/core/messages");
 const MAX_LOOPS = 6;
 const WINNER_CONFIDENCE_THRESHOLD = 0.30;
 // Pure greeting / meta-identity phrases. Synthesis is allowed to win
@@ -92,6 +94,9 @@ class ReactiveOrchestrator {
         ];
     }
     async run(task) {
+        if (process.env.USE_LANGGRAPH === 'true') {
+            return this.runGraph(task);
+        }
         const { sessionId, message } = task;
         const start = Date.now();
         let loops = 0;
@@ -105,6 +110,10 @@ class ReactiveOrchestrator {
         while (loops < MAX_LOOPS) {
             const events = BlackboardEventRepository_1.BlackboardEventRepository.findBySession(sessionId);
             const last = events.at(-1);
+            // Isolate the current conversation turn for evaluation
+            const reversedUserMsgIdx = [...events].reverse().findIndex(e => e.event_type === 'user_message');
+            const lastUserMsgIdx = reversedUserMsgIdx >= 0 ? events.length - 1 - reversedUserMsgIdx : 0;
+            const currentTurnEvents = events.slice(lastUserMsgIdx);
             // Check for terminal events written by the previous iteration.
             if (last?.event_type === 'synthesis_complete' ||
                 last?.event_type === 'escalation_required') {
@@ -112,9 +121,8 @@ class ReactiveOrchestrator {
                 break;
             }
             // Fan-out evaluation — synchronous, zero LLM cost.
-            const rawBids = this.agents.map(a => a.evaluate(events));
-            const lastUserMsg = [...events].reverse()
-                .find(e => e.event_type === 'user_message')?.content ?? '';
+            const rawBids = this.agents.map(a => a.evaluate(currentTurnEvents));
+            const lastUserMsg = currentTurnEvents.find(e => e.event_type === 'user_message')?.content ?? '';
             // --- Synthesis guard ---
             // Synthesis is ONLY allowed to win when:
             //   a) It's a genuine greeting/identity question (conversational fallback), OR
@@ -123,7 +131,7 @@ class ReactiveOrchestrator {
             const synthIdx = rawBids.findIndex(b => b.agentName === 'synthesis_agent');
             if (synthIdx !== -1) {
                 const synthBid = rawBids[synthIdx];
-                const specialistOutputExists = events.some(e => (e.event_type === 'agent_output' || e.event_type === 'code_written') && e.author !== 'synthesis_agent');
+                const specialistOutputExists = currentTurnEvents.some(e => (e.event_type === 'agent_output' || e.event_type === 'code_written') && e.author !== 'synthesis_agent');
                 const specialistBiddingNow = rawBids.some(b => b.agentName !== 'synthesis_agent' && b.confidence >= WINNER_CONFIDENCE_THRESHOLD);
                 // Allow Mode 1 (0.90) only when a specialist has finished AND no specialist is competing now.
                 // Allow Mode 2 (0.40) only for genuine greetings.
@@ -162,15 +170,19 @@ class ReactiveOrchestrator {
             }
             // --- Code boost ---
             // Extend code keyword detection with the extra list.
+            // Do NOT override intentional abstains (repeated failures, standing down, etc.).
             const codeIdx = rawBids.findIndex(b => b.agentName === 'code_agent');
             if (codeIdx !== -1 && rawBids[codeIdx].confidence === 0) {
-                const t = lastUserMsg.toLowerCase();
-                if (CODE_EXTRA_KEYWORDS.some(k => t.includes(k))) {
-                    rawBids[codeIdx] = {
-                        ...rawBids[codeIdx],
-                        confidence: 0.55,
-                        proposedAction: 'Generate or explain code for detected code-related query',
-                    };
+                const isIntentionalAbstain = /abstain|standing down/i.test(rawBids[codeIdx].proposedAction);
+                if (!isIntentionalAbstain) {
+                    const t = lastUserMsg.toLowerCase();
+                    if (CODE_EXTRA_KEYWORDS.some(k => t.includes(k))) {
+                        rawBids[codeIdx] = {
+                            ...rawBids[codeIdx],
+                            confidence: 0.55,
+                            proposedAction: 'Generate or explain code for detected code-related query',
+                        };
+                    }
                 }
             }
             const aboveThreshold = rawBids
@@ -275,6 +287,66 @@ class ReactiveOrchestrator {
             terminationReason,
         };
     }
+    async runGraph(task) {
+        const { sessionId, message } = task;
+        const start = Date.now();
+        // Seed the legacy ledger
+        BlackboardEventRepository_1.BlackboardEventRepository.append(sessionId, 'user_message', 'user', message);
+        try {
+            task.onProgress?.('status', { message: 'LangGraph Orchestrator started...' });
+        }
+        catch { /* ignore */ }
+        // Load persistent history from the Blackboard to seed the Graph
+        const events = BlackboardEventRepository_1.BlackboardEventRepository.findBySession(sessionId);
+        const chatHistory = [];
+        // Skip the newly added message, it goes directly into the ephemeral taskWorkspace
+        for (let i = 0; i < events.length - 1; i++) {
+            const e = events[i];
+            if (e.event_type === 'user_message')
+                chatHistory.push(new messages_1.HumanMessage(e.content));
+            else if (e.event_type === 'synthesis_complete')
+                chatHistory.push(new messages_1.AIMessage(e.content));
+        }
+        const initialState = {
+            chatHistory,
+            taskWorkspace: [new messages_1.HumanMessage(message)],
+            errorCount: 0,
+            activeAgent: 'orchestrator',
+        };
+        const config = { configurable: { thread_id: sessionId } };
+        // Stream node transitions to the Vite frontend
+        const stream = await workflow_1.compiledGraph.stream(initialState, config);
+        for await (const chunk of stream) {
+            const nodeName = Object.keys(chunk)[0];
+            if (nodeName && nodeName !== '__start__' && nodeName !== 'orchestrator') {
+                try {
+                    task.onProgress?.('agent_update', {
+                        agent: nodeName,
+                        action: `Graph Node Executing: ${nodeName}`
+                    });
+                }
+                catch { /* ignore */ }
+            }
+        }
+        // Extract the final synthesized state
+        const finalState = await workflow_1.compiledGraph.getState(config);
+        const finalMessages = finalState.values.chatHistory;
+        const lastMsg = finalMessages[finalMessages.length - 1];
+        const finalContent = lastMsg ? lastMsg.content : 'No response generated.';
+        BlackboardEventRepository_1.BlackboardEventRepository.append(sessionId, 'synthesis_complete', 'synthesis_agent', finalContent, { graph_mode: true });
+        try {
+            task.onProgress?.('agent_complete', { agent: 'synthesis_agent', result: finalContent });
+        }
+        catch { /* ignore */ }
+        return {
+            sessionId,
+            events: BlackboardEventRepository_1.BlackboardEventRepository.findBySession(sessionId),
+            finalResponse: finalContent,
+            totalLoops: 1, // Graph execution is represented as 1 synchronous block to the legacy API
+            totalLatencyMs: Date.now() - start,
+            terminationReason: 'synthesis_complete',
+        };
+    }
     /** Provider health — delegated to the shared registry */
     async providerHealth() {
         return this.registry.healthCheck();
@@ -285,8 +357,12 @@ class ReactiveOrchestrator {
      * skips on 429/error with zero delay, and logs which provider served.
      */
     async callWithFallback(events, bid) {
-        const userMsg = events.find(e => e.event_type === 'user_message')?.content ?? '';
-        const agentOutputs = events.filter(e => e.event_type === 'agent_output' || e.event_type === 'code_written');
+        // Isolate the current conversation turn so we only synthesize the current answer
+        const reversedUserMsgIdx = [...events].reverse().findIndex(e => e.event_type === 'user_message');
+        const lastUserMsgIdx = reversedUserMsgIdx >= 0 ? events.length - 1 - reversedUserMsgIdx : 0;
+        const currentTurnEvents = events.slice(lastUserMsgIdx);
+        const userMsg = currentTurnEvents.find(e => e.event_type === 'user_message')?.content ?? '';
+        const agentOutputs = currentTurnEvents.filter(e => e.event_type === 'agent_output' || e.event_type === 'code_written');
         const isCodeFocused = /\[Focus:\s*code\]/i.test(userMsg);
         let synthBase = 'You are a synthesis engine. Combine the agent outputs below into a single, ' +
             'coherent, concise response that directly addresses the user\'s request. ' +

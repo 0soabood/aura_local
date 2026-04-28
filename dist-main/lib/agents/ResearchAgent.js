@@ -21,6 +21,8 @@ const SYSTEM_PROMPT = 'You are the Research Agent — an expert analyst and info
     '3. Use headers and bullet points for complex answers. Use prose for simple ones.\n' +
     '4. If prior agents have already contributed context, build on it — do not repeat it.\n' +
     '5. Close with a concise summary if the answer is longer than 3 paragraphs.\n\n' +
+    'TOOL EXECUTION RULES:\n' +
+    '- Ensure all string values in function call arguments are properly JSON-escaped.\n\n' +
     'OUTPUT FORMAT:\n' +
     '- Lead with the direct answer to the question.\n' +
     '- Follow with supporting evidence or explanation.\n' +
@@ -76,7 +78,8 @@ class ResearchAgent extends types_1.BaseAgent {
     async execute(events, bid) {
         const messages = this.buildMessages(events, SYSTEM_PROMPT);
         const reg = this.buildResearchToolRegistry();
-        const reactResult = await this.runReactLoop(messages, PRIMARY_ROUTING, reg.describe(), reg, { temperature: 0.1 });
+        const reactResult = await this.runReactLoop(messages, PRIMARY_ROUTING, [], // compound-beta-mini does not support tool calling.
+        reg, { temperature: 0.0 });
         return {
             event_type: 'agent_output',
             content: reactResult.content,

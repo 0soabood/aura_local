@@ -21,6 +21,14 @@ const PROVIDER_CONFIGS = [
         format: 'openai',
     },
     {
+        id: 'vertex',
+        envKey: 'GOOGLE_CLOUD_PROJECT',
+        baseUrl: '',
+        defaultModel: 'gemini-2.5-flash',
+        rpm: 60,
+        format: 'vertex',
+    },
+    {
         id: 'google',
         envKey: 'GOOGLE_AI_STUDIO_API_KEY',
         baseUrl: 'https://generativelanguage.googleapis.com/v1beta',

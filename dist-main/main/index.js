@@ -49,7 +49,19 @@ Object.defineProperty(exports, "__esModule", { value: true });
 // provider module captures it at class-instantiation time.
 const dotenv_1 = __importDefault(require("dotenv"));
 dotenv_1.default.config({ path: '.env' });
-console.log('[ENV] GROQ_API_KEY present:', !!process.env.GROQ_API_KEY);
+const PROVIDER_ENV_KEYS = {
+    vertex: 'GOOGLE_CLOUD_PROJECT',
+    google: 'GOOGLE_AI_STUDIO_API_KEY',
+    groq: 'GROQ_API_KEY',
+    openrouter: 'OPENROUTER_API_KEY',
+    mistral: 'MISTRAL_API_KEY',
+    cohere: 'COHERE_API_KEY',
+    deepseek: 'DEEPSEEK_API_KEY',
+};
+const available = Object.entries(PROVIDER_ENV_KEYS)
+    .filter(([, envKey]) => !!process.env[envKey])
+    .map(([id]) => id);
+console.log('[ENV] Providers available:', available.length ? available.join(', ') : 'NONE — set at least one API key');
 const vite_1 = require("vite");
 const path_1 = __importDefault(require("path"));
 const index_1 = require("../db/index");

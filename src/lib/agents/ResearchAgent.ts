@@ -27,6 +27,9 @@ const SYSTEM_PROMPT =
   '4. If prior agents have already contributed context, build on it — do not repeat it.\n' +
   '5. Close with a concise summary if the answer is longer than 3 paragraphs.\n\n' +
 
+  'TOOL EXECUTION RULES:\n' +
+  '- Ensure all string values in function call arguments are properly JSON-escaped.\n\n' +
+
   'OUTPUT FORMAT:\n' +
   '- Lead with the direct answer to the question.\n' +
   '- Follow with supporting evidence or explanation.\n' +
@@ -86,7 +89,7 @@ export class ResearchAgent extends BaseAgent {
       PRIMARY_ROUTING,
       reg.describe(),
       reg,
-      { temperature: 0.1 },
+      { temperature: 0.0 },
     );
 
     return {

@@ -48,7 +48,7 @@ export abstract class BaseAgent implements ReactiveAgent {
 
   /** Find the first user_message in the log. */
   protected userMessage(events: BlackboardEvent[]): string {
-    return events.find(e => e.event_type === 'user_message')?.content ?? '';
+    return [...events].reverse().find(e => e.event_type === 'user_message')?.content ?? '';
   }
 
   /** Collect content strings from agent_output events by a specific author. */
@@ -80,9 +80,9 @@ export abstract class BaseAgent implements ReactiveAgent {
     events: BlackboardEvent[],
     systemPrompt: string,
   ): CallerMessage[] {
-    const ASSISTANT_EVENTS = new Set([
-      'agent_output', 'code_written', 'code_context_retrieved', 'synthesis_complete',
-    ]);
+    // Find where the current turn starts
+    const reversedUserMsgIdx = [...events].reverse().findIndex(e => e.event_type === 'user_message');
+    const lastUserMsgIdx = reversedUserMsgIdx >= 0 ? events.length - 1 - reversedUserMsgIdx : 0;
 
     // assembleSystemPrompt() is the single authority channel: memory first, then
     // the agent-specific base prompt.  One system message, deterministic order.
@@ -90,12 +90,17 @@ export abstract class BaseAgent implements ReactiveAgent {
       { role: 'system', content: assembleSystemPrompt(systemPrompt) },
     ];
 
-    for (const e of events) {
+    for (let i = 0; i < events.length; i++) {
+      const e = events[i];
+      const isCurrentTurn = i >= lastUserMsgIdx;
+
       if (e.event_type === 'user_message') {
         messages.push({ role: 'user', content: e.content });
-      } else if (ASSISTANT_EVENTS.has(e.event_type)) {
+      } else if (e.event_type === 'synthesis_complete') {
+        messages.push({ role: 'assistant', content: e.content });
+      } else if (isCurrentTurn && (e.event_type === 'agent_output' || e.event_type === 'code_written' || e.event_type === 'code_context_retrieved')) {
         messages.push({ role: 'assistant', content: `[${e.author}]: ${e.content}` });
-      } else if (e.event_type === 'execution_error') {
+      } else if (isCurrentTurn && e.event_type === 'execution_error') {
         messages.push({ role: 'user', content: `[system — execution error from ${e.author}]: ${e.content}` });
       }
       // escalation_required and orchestrator meta-events are intentionally skipped.
@@ -105,12 +110,12 @@ export abstract class BaseAgent implements ReactiveAgent {
   }
 
   /**
-   * Returns false when the provider for the given routing string is not
-   * registered, preventing a dead provider from winning a bid.
+   * Returns true only when the provider is registered AND has an API key set.
+   * Uses getAvailableProviders() which filters by env key presence.
    */
   protected isProviderHealthy(routing: string): boolean {
     const providerId = routing.includes(':') ? routing.slice(0, routing.indexOf(':')) : routing;
-    return this.registry.listProviders().includes(providerId);
+    return this.registry.getAvailableProviders().some(cfg => cfg.id === providerId);
   }
 
   /**
@@ -160,11 +165,29 @@ export abstract class BaseAgent implements ReactiveAgent {
     let lastModel      = model;
 
     for (let step = 0; step < MAX_REACT_STEPS; step++) {
-      const result = await this.registry.call(model, '', {
+      let result = await this.registry.call(model, '', {
         temperature: opts.temperature,
         messages:    localMessages,
         tools:       toolDefs.length ? toolDefs : undefined,
       });
+
+      if (result.rateLimited) {
+        // Primary provider can't handle this request (rate limit or token size).
+        // Try all other available providers in load-sorted order.
+        const fallback = await this.registry.callWithFallback('', {
+          temperature: opts.temperature,
+          messages:    localMessages as any,
+          tools:       toolDefs.length ? toolDefs : undefined,
+        });
+        if (!fallback.rateLimited && fallback.text) {
+          result = fallback;
+        } else {
+          throw new Error(
+            `[${model}] token/rate limit exceeded and all fallbacks failed: ` +
+            (result.errorMessage ?? fallback.errorMessage ?? 'no providers available'),
+          );
+        }
+      }
 
       totalTokensIn  += result.tokensIn;
       totalTokensOut += result.tokensOut;
@@ -184,9 +207,9 @@ export abstract class BaseAgent implements ReactiveAgent {
       // Append the assistant's tool-call intent (preserves OpenAI protocol).
       localMessages.push({
         role:       'assistant',
-        content:    null,
+        content:    '',
         tool_calls: result.toolCalls,
-      });
+      } as any);
 
       // Execute each tool call and append the result as a tool message.
       for (const tc of result.toolCalls) {
@@ -200,34 +223,26 @@ export abstract class BaseAgent implements ReactiveAgent {
         }
 
         const toolResult = await toolRegistry.execute({
-          id:        tc.id ?? `tool_${step}_${tc.function.name}`,
-          name:      tc.function.name,
+          id:        tc.id ?? `tool_${step}_${tc.function?.name}`,
+          name:      tc.function?.name,
           arguments: toolArgs,
         });
 
         localMessages.push({
-          role:         'tool',
-          content:      toolResult.content,
-          tool_call_id: toolResult.tool_call_id,
-        });
+          role:       'tool',
+          content:    String(toolResult),
+          tool_call_id: tc.id ?? `tool_${step}_${tc.function?.name}`,
+          name:       tc.function?.name,
+        } as any);
       }
     }
 
-    // Max steps reached — make a final call without tools to force a summary.
-    const finalResult = await this.registry.call(model, '', {
-      temperature: opts.temperature,
-      messages: [
-        ...localMessages,
-        { role: 'user', content: 'Please provide your final answer based on the information gathered.' },
-      ],
-    });
-
     return {
-      content:   finalResult.text,
-      model:     finalResult.model,
-      latencyMs: totalLatency + finalResult.latencyMs,
-      tokensIn:  totalTokensIn  + finalResult.tokensIn,
-      tokensOut: totalTokensOut + finalResult.tokensOut,
+      content:    '',
+      model:      lastModel,
+      latencyMs:  totalLatency,
+      tokensIn:   totalTokensIn,
+      tokensOut:  totalTokensOut,
     };
   }
 }

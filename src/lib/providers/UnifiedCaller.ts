@@ -1,14 +1,12 @@
 /**
  * UnifiedCaller — single HTTP call function for all supported provider APIs.
  *
- * Two wire formats:
- *   OpenAI-compatible  — POST /chat/completions, Bearer auth,
- *                        body: { model, messages, temperature, max_tokens }
- *                        response: choices[0].message.content
- *
- *   Google AI Studio   — POST models/{model}:generateContent?key=...,
- *                        body: { contents: [{ parts: [{ text }] }] }
- *                        response: candidates[0].content.parts[0].text
+ * Three wire formats:
+ *   openai   — POST /chat/completions, Bearer auth (Groq, Mistral, Cohere,
+ *              DeepSeek, OpenRouter all speak this dialect)
+ *   google   — POST models/{model}:generateContent?key=... (AI Studio)
+ *   vertex   — Google Vertex AI via @google/genai SDK using ADC / service
+ *              account (GOOGLE_APPLICATION_CREDENTIALS + GOOGLE_CLOUD_PROJECT)
  */
 
 export interface CallerMessage {
@@ -37,7 +35,7 @@ export interface CallerResult {
   toolCalls?: any[];
 }
 
-export type ProviderFormat = 'openai' | 'google';
+export type ProviderFormat = 'openai' | 'google' | 'vertex';
 
 export interface CallerOptions {
   temperature?: number;
@@ -56,9 +54,8 @@ export async function callProvider(
 ): Promise<CallerResult> {
   const start = Date.now();
 
-  if (opts.format === 'google') {
-    return callGoogle(model, messages, opts, start);
-  }
+  if (opts.format === 'vertex') return callVertex(model, messages, opts, start);
+  if (opts.format === 'google')  return callGoogle(model, messages, opts, start);
   return callOpenAI(model, messages, opts, start);
 }
 
@@ -97,18 +94,19 @@ async function callOpenAI(
 
   const latencyMs = Date.now() - start;
 
-  if (res.status === 429) {
+  if (res.status === 429 || res.status === 413) {
     const retryAfter = res.headers.get('retry-after');
     const retrySeconds = retryAfter ? parseInt(retryAfter, 10) : undefined;
     const validRetry = retrySeconds !== undefined && !isNaN(retrySeconds) ? retrySeconds : undefined;
+    const limitKind = res.status === 413 ? 'token limit exceeded' : 'rate limited';
     return {
       text: '', model, providerId: opts.providerId,
       tokensIn: 0, tokensOut: 0, latencyMs,
       rateLimited: true,
       retryAfterSeconds: validRetry,
       errorMessage: validRetry
-        ? `${opts.providerId} rate limited — retry after ${validRetry}s`
-        : `${opts.providerId} rate limited`,
+        ? `${opts.providerId} ${limitKind} — retry after ${validRetry}s`
+        : `${opts.providerId} ${limitKind}`,
     };
   }
 
@@ -130,6 +128,101 @@ async function callOpenAI(
     rateLimited: false,
     ...(toolCalls?.length ? { toolCalls } : {}),
   };
+}
+
+// ── Google Vertex AI (via @google/genai SDK + ADC) ─────────────────────────
+
+async function callVertex(
+  model: string,
+  messages: CallerMessage[],
+  opts: CallerOptions,
+  start: number,
+): Promise<CallerResult> {
+  // opts.apiKey carries GOOGLE_CLOUD_PROJECT; location comes from env.
+  const project  = opts.apiKey;
+  const location = process.env.GOOGLE_CLOUD_LOCATION ?? 'us-central1';
+
+  // Dynamic import keeps the SDK out of the bundle for providers that don't use it.
+  const { GoogleGenAI } = await import('@google/genai');
+  const ai = new GoogleGenAI({ vertexai: true, project, location } as any);
+
+  // Split system instructions from the conversation.
+  const systemMsg = messages.find(m => m.role === 'system')?.content ?? undefined;
+  const convMsgs  = messages.filter(m => m.role !== 'system');
+
+  // Build Google-format contents array.
+  const contents: any[] = convMsgs.map(m => {
+    if (m.role === 'tool') {
+      // Tool result: find the matching tool name from prior assistant message.
+      return {
+        role: 'tool',
+        parts: [{ functionResponse: {
+          name: m.tool_call_id ?? 'tool',
+          response: { result: m.content ?? '' },
+        } }],
+      };
+    }
+    if (m.role === 'assistant' && m.tool_calls?.length) {
+      // Assistant tool-call request.
+      return {
+        role: 'model',
+        parts: m.tool_calls.map(tc => ({
+          functionCall: {
+            name: tc.function.name,
+            args: (() => { try { return JSON.parse(tc.function.arguments); } catch { return {}; } })(),
+          },
+        })),
+      };
+    }
+    return {
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: m.content ?? '' }],
+    };
+  });
+
+  // Convert OpenAI tool definitions to Google function declarations.
+  const googleTools = opts.tools?.length
+    ? [{ functionDeclarations: opts.tools.map((t: any) => t.function ?? t) }]
+    : undefined;
+
+  try {
+    const response = await ai.models.generateContent({
+      model,
+      contents: contents.length === 1 ? (contents[0].parts?.[0]?.text ?? contents) : contents,
+      config: {
+        ...(systemMsg ? { systemInstruction: systemMsg } : {}),
+        temperature: opts.temperature ?? 0.2,
+        ...(opts.maxTokens ? { maxOutputTokens: opts.maxTokens } : {}),
+        ...(googleTools ? { tools: googleTools } : {}),
+      },
+    });
+
+    return {
+      text:      response.text ?? '',
+      model,
+      providerId: opts.providerId,
+      tokensIn:   response.usageMetadata?.promptTokenCount    ?? 0,
+      tokensOut:  response.usageMetadata?.candidatesTokenCount ?? 0,
+      latencyMs:  Date.now() - start,
+      rateLimited: false,
+    };
+  } catch (err: any) {
+    const latencyMs = Date.now() - start;
+    const is429 = err?.status === 429 || err?.code === 429 ||
+      (typeof err?.message === 'string' && err.message.includes('RESOURCE_EXHAUSTED'));
+    const is413 = err?.status === 413 || err?.code === 413 ||
+      (typeof err?.message === 'string' && err.message.includes('Request payload size exceeds'));
+
+    if (is429 || is413) {
+      return {
+        text: '', model, providerId: opts.providerId,
+        tokensIn: 0, tokensOut: 0, latencyMs,
+        rateLimited: true,
+        errorMessage: `vertex ${is413 ? 'token limit exceeded' : 'rate limited'}`,
+      };
+    }
+    throw err;
+  }
 }
 
 // ── Google AI Studio ───────────────────────────────────────────────────────
@@ -165,18 +258,19 @@ async function callGoogle(
 
   const latencyMs = Date.now() - start;
 
-  if (res.status === 429) {
+  if (res.status === 429 || res.status === 413) {
     const retryAfter = res.headers.get('retry-after');
     const retrySeconds = retryAfter ? parseInt(retryAfter, 10) : undefined;
     const validRetry = retrySeconds !== undefined && !isNaN(retrySeconds) ? retrySeconds : undefined;
+    const limitKind = res.status === 413 ? 'token limit exceeded' : 'rate limited';
     return {
       text: '', model, providerId: opts.providerId,
       tokensIn: 0, tokensOut: 0, latencyMs,
       rateLimited: true,
       retryAfterSeconds: validRetry,
       errorMessage: validRetry
-        ? `google rate limited — retry after ${validRetry}s`
-        : 'google rate limited',
+        ? `google ${limitKind} — retry after ${validRetry}s`
+        : `google ${limitKind}`,
     };
   }
 
