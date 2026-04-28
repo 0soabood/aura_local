@@ -2,6 +2,9 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ResearchAgent = void 0;
 const types_1 = require("./types");
+const read_file_1 = require("../tools/builtin/read_file");
+const list_directory_1 = require("../tools/builtin/list_directory");
+const registry_1 = require("../tools/registry");
 const RESEARCH_RE = /\b(research|find|search|market|analyze|analyse|trend|intel|report|price|news|data|what is|who is|how does|when did|where is|why does|benchmark|compare|survey)\b/i;
 const PRIMARY_ROUTING = 'groq:compound-beta-mini';
 const SYSTEM_PROMPT = 'You are the Research Agent — an expert analyst and information synthesizer. ' +
@@ -62,21 +65,27 @@ class ResearchAgent extends types_1.BaseAgent {
         }
         return { agentName: 'research_agent', confidence, proposedAction, expectedOutputShape: 'text' };
     }
+    buildResearchToolRegistry() {
+        const reg = this.toolRegistry ?? new registry_1.ToolRegistry();
+        if (!reg.has('read_file'))
+            reg.register(read_file_1.readFileDef, read_file_1.readFileFn);
+        if (!reg.has('list_directory'))
+            reg.register(list_directory_1.listDirectoryDef, list_directory_1.listDirectoryFn);
+        return reg;
+    }
     async execute(events, bid) {
         const messages = this.buildMessages(events, SYSTEM_PROMPT);
-        const result = await this.registry.call(PRIMARY_ROUTING, '', { temperature: 0.1, messages });
-        const searchResults = result.executed_tools
-            ? JSON.stringify(result.executed_tools)
-            : undefined;
+        const reg = this.buildResearchToolRegistry();
+        const reactResult = await this.runReactLoop(messages, PRIMARY_ROUTING, reg.describe(), reg, { temperature: 0.1 });
         return {
             event_type: 'agent_output',
-            content: searchResults ? `${result.text}\n\n[Search results: ${searchResults}]` : result.text,
+            content: reactResult.content,
             metadata: {
-                model_id: result.model,
-                latency_ms: result.latencyMs,
+                model_id: reactResult.model,
+                latency_ms: reactResult.latencyMs,
                 confidence: bid.confidence,
-                tokens_in: result.tokensIn,
-                tokens_out: result.tokensOut,
+                tokens_in: reactResult.tokensIn,
+                tokens_out: reactResult.tokensOut,
             },
         };
     }

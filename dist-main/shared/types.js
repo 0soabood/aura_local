@@ -51,6 +51,7 @@ exports.EVENT_TYPES = [
     'escalation_required',
     'code_written',
     'code_context_retrieved',
+    'blackboard_update',
 ];
 exports.AGENT_NAMES = [
     'research_agent',

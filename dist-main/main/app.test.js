@@ -276,6 +276,52 @@ let app;
         (0, vitest_1.expect)(res.status).toBe(200);
     });
 });
+(0, vitest_1.describe)('Input Validation', () => {
+    (0, vitest_1.it)('GET /api/logs?limit=abc returns 400', async () => {
+        const res = await (0, supertest_1.default)(app).get('/api/logs?limit=abc');
+        (0, vitest_1.expect)(res.status).toBe(400);
+        (0, vitest_1.expect)(res.body.error).toMatch(/limit/);
+    });
+    (0, vitest_1.it)('GET /api/model-runs?limit=abc returns 400', async () => {
+        const res = await (0, supertest_1.default)(app).get('/api/model-runs?limit=abc');
+        (0, vitest_1.expect)(res.status).toBe(400);
+    });
+    (0, vitest_1.it)('GET /api/logs/not-a-number returns 400', async () => {
+        const res = await (0, supertest_1.default)(app).get('/api/logs/not-a-number');
+        (0, vitest_1.expect)(res.status).toBe(400);
+        (0, vitest_1.expect)(res.body.error).toBe('invalid id');
+    });
+    (0, vitest_1.it)('DELETE /api/logs/not-a-number returns 400', async () => {
+        const res = await (0, supertest_1.default)(app).delete('/api/logs/not-a-number');
+        (0, vitest_1.expect)(res.status).toBe(400);
+        (0, vitest_1.expect)(res.body.error).toBe('invalid id');
+    });
+    (0, vitest_1.it)('POST /api/roadmap without title returns 400', async () => {
+        const res = await (0, supertest_1.default)(app).post('/api/roadmap').send({ priority: 1 });
+        (0, vitest_1.expect)(res.status).toBe(400);
+        (0, vitest_1.expect)(res.body.error).toMatch(/title/);
+    });
+    (0, vitest_1.it)('POST /api/roadmap with title > 500 chars returns 400', async () => {
+        const res = await (0, supertest_1.default)(app).post('/api/roadmap').send({ title: 'x'.repeat(501) });
+        (0, vitest_1.expect)(res.status).toBe(400);
+        (0, vitest_1.expect)(res.body.error).toMatch(/500/);
+    });
+    (0, vitest_1.it)('POST /api/snippets without title returns 400', async () => {
+        const res = await (0, supertest_1.default)(app).post('/api/snippets').send({ content: 'some content' });
+        (0, vitest_1.expect)(res.status).toBe(400);
+        (0, vitest_1.expect)(res.body.error).toMatch(/title/);
+    });
+    (0, vitest_1.it)('POST /api/snippets with oversized content returns 400', async () => {
+        const res = await (0, supertest_1.default)(app).post('/api/snippets').send({ title: 'T', content: 'x'.repeat(50_001) });
+        (0, vitest_1.expect)(res.status).toBe(400);
+        (0, vitest_1.expect)(res.body.error).toMatch(/50,000/);
+    });
+    (0, vitest_1.it)('POST /api/orchestrate with message > 10K chars returns 400', async () => {
+        const res = await (0, supertest_1.default)(app).post('/api/orchestrate').send({ message: 'x'.repeat(10_001) });
+        (0, vitest_1.expect)(res.status).toBe(400);
+        (0, vitest_1.expect)(res.body.error).toMatch(/10,000/);
+    });
+});
 (0, vitest_1.describe)('POST /api/admin/reload-memory', () => {
     (0, vitest_1.it)('returns success shape on a clean reload', async () => {
         vitest_1.vi.spyOn(loader, 'reloadAuraMemory').mockReturnValue({

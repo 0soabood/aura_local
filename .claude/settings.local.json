@@ -10,7 +10,11 @@
       "Bash(npx vitest *)",
       "Bash(tasklist)",
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(npm run *)",
+      "Bash(git -C \"C:\\\\Dev\\\\APPS\\\\aura_local_sync\" checkout master)",
+      "Bash(git -C 'C:\\\\Dev\\\\APPS\\\\aura_local_sync' merge claude/elegant-williams-ed68ea --no-ff -m ' *)",
+      "Bash(git -C \"C:\\\\Dev\\\\APPS\\\\aura_local_sync\" diff src/components/CoreTerminal.tsx)"
     ]
   }
 }
