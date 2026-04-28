@@ -105,6 +105,7 @@ export interface RoadmapItem {
   priority: number;
   roi_score: number;
   lane: string;
+  tags?: string; // JSON-stringified string[] — optional for backward compat
   status: WorkflowStatus;
   verification_state: VerificationState;
   verification_reasoning?: string;
@@ -253,6 +254,49 @@ export interface AuraAPI {
   listSessions: () => Promise<OrchestrateSession[]>;
   getSessionEvents: (sessionId: string) => Promise<BlackboardEvent[]>;
   deleteSession: (sessionId: string) => Promise<void>;
+
+  // UI layer — brutalist design components
+  getStatsV2: () => Promise<TelemetryMetricsV2>;
+  listSessionsV2: () => Promise<Session[]>;
+  streamOrchestrate: (
+    payload: { sessionId?: string; prompt: string },
+    onEvent: (e: OrchestrateEvent) => void,
+  ) => Promise<void>;
+}
+
+// ── UI design-layer additions ─────────────────────────────────────────────────
+
+/** Richer session shape used by the brutalist UI components. */
+export interface Session {
+  id: string;
+  name: string;
+  created_at: string;
+  state: 'running' | 'done' | 'error' | 'archived';
+  token_count: number;
+  model: string;
+}
+
+/** Alias for WorkflowStatus used by the brutalist Roadmap component. */
+export type RoadmapStatus = WorkflowStatus;
+
+/** Exported level union for use in SystemLogs component. */
+export type LogLevel = SystemLog['level'];
+
+/** SSE event envelope from the orchestrate stream. */
+export interface OrchestrateEvent {
+  type: 'token' | 'tool_call' | 'tool_result' | 'final' | 'error';
+  ts: string;
+  data: any;
+}
+
+/** Telemetry shape used by the ROI dashboard. */
+export interface TelemetryMetricsV2 {
+  total_routes: number;
+  avg_latency_ms: number;
+  success_rate: number;       // 0..1
+  est_token_cost_usd: number;
+  hourly_latency_ms: number[]; // 24 buckets
+  spend_series_usd: number[];
 }
 
 declare global {

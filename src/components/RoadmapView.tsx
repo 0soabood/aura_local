@@ -1,222 +1,106 @@
-import { useEffect, useMemo, useState } from 'react';
+// src/components/RoadmapView.tsx
+import { useEffect, useState } from 'react';
+import { motion } from 'motion/react';
 import { Plus } from 'lucide-react';
-import { RoadmapItem, WorkflowStatus } from '../shared/types';
+import type { RoadmapItem, RoadmapStatus } from '../shared/types';
+import { Spinner, SectionNum } from './ui/atoms';
 
-const aura = (window as any).aura;
+const getAura = () => (window as any).aura;
 
-type ColumnDef = { id: WorkflowStatus; label: string };
-
-const COLUMNS: ColumnDef[] = [
-  { id: 'backlog', label: 'BACKLOG' },
-  { id: 'todo', label: 'TODO_QUEUE' },
-  { id: 'in_progress', label: 'IN_EXECUTION' },
-  { id: 'done', label: 'CONCLUDED' },
-  { id: 'archived', label: 'ARCHIVED' },
+const LANES: { key: RoadmapStatus; title: string; bg: string }[] = [
+  { key: 'backlog',     title: 'Backlog',     bg: 'var(--card)' },
+  { key: 'todo',        title: 'To do',       bg: 'var(--card)' },
+  { key: 'in_progress', title: 'In progress', bg: 'var(--chartreuse)' },
+  { key: 'done',        title: 'Done',        bg: 'var(--card-alt)' },
 ];
-
-const VERIFIED = new Set(['accepted', 'source_checked']);
 
 export default function RoadmapView() {
   const [items, setItems] = useState<RoadmapItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [creating, setCreating] = useState(false);
-  const [newTitle, setNewTitle] = useState('');
-  const [newROI, setNewROI] = useState(6);
   const [draggingId, setDraggingId] = useState<string | null>(null);
-  const [dropTarget, setDropTarget] = useState<WorkflowStatus | null>(null);
 
-  useEffect(() => {
-    fetchItems();
-  }, []);
-
-  const fetchItems = async () => {
+  const fetchData = async () => {
     setLoading(true);
-    try {
-      const data = await aura.listRoadmapItems();
-      setItems(Array.isArray(data) ? data : []);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
+    try { setItems(await getAura().listRoadmapItems()); }
+    catch (err) { console.error('[RoadmapView]', err); }
+    finally { setLoading(false); }
   };
+  useEffect(() => { fetchData(); }, []);
 
   const handleCreate = async () => {
-    const title = newTitle.trim();
-    if (!title) return;
     try {
-      await aura.createRoadmapItem({
-        title,
-        roi_score: newROI,
-        lane: 'CORE_STRAT',
-        priority: Math.max(1, Math.min(5, Math.floor(newROI / 2))),
-        status: 'backlog',
-      });
-      setNewTitle('');
-      setNewROI(6);
-      setCreating(false);
-      await fetchItems();
-    } catch (err) {
-      console.error(err);
-    }
+      await getAura().createRoadmapItem({ title: 'New item', status: 'backlog', priority: 0, roi_score: 0, lane: 'ux', tags: '[]' });
+      await fetchData();
+    } catch (err) { console.error('[RoadmapView]', err); }
   };
 
-  const handleUpdateStatus = async (id: string, status: WorkflowStatus) => {
-    try {
-      await aura.updateRoadmapItem(id, { status });
-      await fetchItems();
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  const handleDelete = async (id: string) => {
-    try {
-      await aura.deleteRoadmapItem(id);
-      await fetchItems();
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  const grouped = useMemo(() => {
-    const buckets: Record<WorkflowStatus, RoadmapItem[]> = {
-      backlog: [],
-      todo: [],
-      in_progress: [],
-      done: [],
-      archived: [],
-    };
-    for (const item of items) {
-      buckets[item.status].push(item);
-    }
-    for (const key of Object.keys(buckets) as WorkflowStatus[]) {
-      buckets[key].sort((a, b) => {
-        if (a.priority !== b.priority) return b.priority - a.priority;
-        return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
-      });
-    }
-    return buckets;
-  }, [items]);
-
-  const onDropColumn = async (nextStatus: WorkflowStatus) => {
+  const handleDrop = async (status: RoadmapStatus) => {
     if (!draggingId) return;
-    const item = items.find((x) => x.id === draggingId);
-    setDropTarget(null);
-    setDraggingId(null);
-    if (!item || item.status === nextStatus) return;
-    await handleUpdateStatus(item.id, nextStatus);
+    try { await getAura().updateRoadmapItem(draggingId, { status }); await fetchData(); }
+    catch (err) { console.error('[RoadmapView]', err); }
+    finally { setDraggingId(null); }
   };
 
   return (
     <div className="page">
       <div className="page-hd">
         <div className="page-hd-title">
-          <b>Roadmap Matrix</b>
-          <span>{items.length} cards</span>
+          <SectionNum n="02" />
+          <b>Specimen Sheet</b>
+          <span>{items.length} cards · 4 lanes</span>
         </div>
-        <button className="btn primary" onClick={() => setCreating((v) => !v)}>
-          <Plus size={11} style={{ verticalAlign: 'middle', marginRight: 4 }} />
-          NEW CARD
-        </button>
+        <div className="page-hd-actions">
+          <button className="btn primary" onClick={handleCreate}><Plus size={12} /> NEW</button>
+        </div>
       </div>
-
-      <div className="page-body" style={{ padding: 'var(--pad-1)' }}>
-        {creating && (
-          <div className="chart-card" style={{ marginBottom: 'var(--pad-1)' }}>
-            <div className="chart-hd">
-              <span>Create roadmap card</span>
-              <span style={{ color: 'var(--text-4)' }}>backlog</span>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', gap: 'var(--pad-1)' }}>
-              <input
-                value={newTitle}
-                onChange={(e) => setNewTitle(e.target.value)}
-                placeholder="Define objective..."
-                style={{ border: '1px solid var(--border-2)', padding: '6px 8px', color: 'var(--text)' }}
-              />
-              <input
-                type="number"
-                min={0}
-                max={10}
-                value={newROI}
-                onChange={(e) => setNewROI(Number(e.target.value) || 0)}
-                style={{ width: 72, textAlign: 'center', border: '1px solid var(--border-2)', padding: '6px 8px', color: 'var(--accent)' }}
-              />
-              <button className="btn primary" onClick={handleCreate}>save</button>
-            </div>
+      <div className="page-body" style={{ padding: 20 }}>
+        {loading ? <Spinner /> : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, height: '100%' }}>
+            {LANES.map(lane => {
+              const laneItems = items.filter(i => i.status === lane.key);
+              return (
+                <div key={lane.key} onDragOver={(e) => e.preventDefault()} onDrop={() => handleDrop(lane.key)} style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                  <div className="row" style={{ justifyContent: 'space-between', borderBottom: '2px solid var(--rule)', padding: '8px 4px' }}>
+                    <span className="display" style={{ fontSize: 22 }}>{lane.title}</span>
+                    <span className="mono" style={{ fontSize: 10, color: 'var(--text-3)' }}>{laneItems.length} ITEMS</span>
+                  </div>
+                  <div style={{ marginTop: 14, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 12, paddingBottom: 12 }}>
+                    {laneItems.map(it => {
+                      const tags: string[] = JSON.parse(it.tags || '[]');
+                      return (
+                        <motion.div key={it.id} draggable onDragStart={() => setDraggingId(it.id)} onDragEnd={() => setDraggingId(null)}
+                          whileHover={{ x: -1, y: -1 }}
+                          style={{ border: '2px solid var(--rule)', background: lane.bg, padding: 12, boxShadow: '4px 4px 0 var(--rule)', cursor: 'grab',
+                            color: lane.key === 'in_progress' ? 'var(--ink)' : 'var(--text)' }}>
+                          <div className="row" style={{ justifyContent: 'space-between' }}>
+                            <span className="mono" style={{ fontSize: 9, fontWeight: 700 }}>· {lane.key.toUpperCase()} ·</span>
+                            <span className="mono" style={{ fontSize: 9, opacity: 0.7 }}>p{it.priority}</span>
+                          </div>
+                          <div className="display" style={{ fontSize: 17, lineHeight: 1.15, marginTop: 6 }}>{it.title}</div>
+                          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-end', marginTop: 12, paddingTop: 8, borderTop: '1px dashed var(--rule)' }}>
+                            <div className="row" style={{ gap: 4, flexWrap: 'wrap', maxWidth: '70%' }}>
+                              {tags.map(t => <span key={t} className="tag" style={{ fontSize: 8 }}>{t}</span>)}
+                            </div>
+                            <div className="row" style={{ gap: 4, alignItems: 'center' }}>
+                              {it.verification_state === 'accepted' && <span className="tag verified" style={{ padding: '0 3px' }}>✓</span>}
+                              {it.verification_state === 'source_checked' && <span className="dot live" />}
+                              <span className="display" style={{ fontSize: 24, lineHeight: 1, color: it.roi_score >= 7 ? 'var(--oxblood)' : 'inherit' }}>
+                                {it.roi_score.toFixed(1)}
+                              </span>
+                            </div>
+                          </div>
+                        </motion.div>
+                      );
+                    })}
+                    {lane.key === 'backlog' && (
+                      <div style={{ border: '2px dashed var(--rule)', padding: 14, textAlign: 'center' }} className="caps">+ DROP CARD HERE</div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
-
-        <div className="roadmap">
-          {COLUMNS.map((column) => {
-            const cards = grouped[column.id];
-            const highlight = dropTarget === column.id;
-            return (
-              <div
-                key={column.id}
-                className={`roadmap-col${column.id === 'in_progress' ? ' in-execution' : ''}`}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setDropTarget(column.id);
-                }}
-                onDragLeave={() => setDropTarget((cur) => (cur === column.id ? null : cur))}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  onDropColumn(column.id);
-                }}
-                style={highlight ? { boxShadow: 'inset 0 0 0 1px var(--accent)' } : undefined}
-              >
-                <div className="roadmap-col-hd">
-                  <span>{column.label}</span>
-                  <span className="col-count">{cards.length}</span>
-                </div>
-
-                <div className="roadmap-cards">
-                  {cards.map((item) => {
-                    const verified = VERIFIED.has(item.verification_state);
-                    const progress =
-                      item.status === 'backlog' ? 4 :
-                      item.status === 'todo' ? 28 :
-                      item.status === 'in_progress' ? 64 :
-                      item.status === 'done' ? 100 : 100;
-
-                    return (
-                      <article
-                        key={item.id}
-                        className={`rcard${item.status === 'in_progress' ? ' executing' : ''}`}
-                        draggable
-                        onDragStart={() => setDraggingId(item.id)}
-                        onDragEnd={() => {
-                          setDraggingId(null);
-                          setDropTarget(null);
-                        }}
-                      >
-                        <div className="rcard-title">{item.title}</div>
-                        <div className="rcard-meta">
-                          <span>ROI {item.roi_score.toFixed(1)}</span>
-                          <span>·</span>
-                          <span>{item.lane}</span>
-                        </div>
-                        <div className="rcard-tags">
-                          <span className={`tag ${verified ? 'verified' : 'unverified'}`}>
-                            {verified ? 'verified' : 'unverified'}
-                          </span>
-                          <span className="tag">p{item.priority}</span>
-                        </div>
-                        <div className="rcard-progress"><div style={{ width: `${progress}%` }} /></div>
-                      </article>
-                    );
-                  })}
-
-                  {!loading && cards.length === 0 && (
-                    <div style={{ color: 'var(--text-4)', fontSize: 'var(--fs-sm)', padding: '4px 2px' }}>— empty —</div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
       </div>
     </div>
   );

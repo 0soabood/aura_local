@@ -1,217 +1,216 @@
-import { useRef } from 'react';
+// src/components/NavigationHub.tsx
+// Brutalist hub: heavy slabs, oversized JetBrains Mono headlines, gaffer-tape
+// stamp, oxblood/chartreuse accents. Each tile navigates to a department.
+
+import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { Terminal, Activity, Layers, Search, FileText } from 'lucide-react';
+import { Terminal as TerminalIcon, Map, BookMarked, BarChart3, ScrollText, Archive, Command } from 'lucide-react';
+import type { TelemetryMetricsV2, Session } from '../shared/types';
+import { Mark } from './ui/atoms';
+
+const getAura = () => (window as any).aura;
 
 interface NavigationHubProps {
   onNavigate: (view: string) => void;
 }
 
-const COLOR_MAP: Record<string, string> = {
-  cyan:    '#06b6d4',
-  emerald: '#10b981',
-  violet:  '#8b5cf6',
-  amber:   '#f59e0b',
-  red:     '#ef4444',
+interface Dept {
+  n: string; key: string; title: string; sub: string; meta: string;
+  Icon: any; accent: 'chart' | 'oxblood' | 'ink' | 'paper'; lead?: boolean;
+}
+
+const ACCENTS = {
+  chart:   { bg: 'var(--chartreuse)', fg: 'var(--ink)' },
+  oxblood: { bg: 'var(--oxblood)',    fg: 'var(--bone)' },
+  ink:     { bg: 'var(--ink)',        fg: 'var(--bone)' },
+  paper:   { bg: 'var(--card)',       fg: 'var(--text)' },
 };
 
-const NODES = [
-  {
-    id: 'terminal',
-    label: 'AURA Terminal',
-    sub: 'Orchestrator v3',
-    icon: Terminal,
-    color: 'cyan',
-    x: 50,
-    y: 52,
-    desc: 'Chat with agents. Real-time SSE streaming.',
-    primary: true,
-  },
-  {
-    id: 'roi',
-    label: 'ROI Dashboard',
-    sub: 'Telemetry',
-    icon: Activity,
-    color: 'emerald',
-    x: 78,
-    y: 28,
-    desc: 'Latency, sessions, error rate.',
-    primary: false,
-  },
-  {
-    id: 'roadmap',
-    label: 'Roadmap',
-    sub: 'Kanban board',
-    icon: Layers,
-    color: 'violet',
-    x: 78,
-    y: 74,
-    desc: '5-column milestone tracker.',
-    primary: false,
-  },
-  {
-    id: 'research',
-    label: 'Research Console',
-    sub: 'Snippets',
-    icon: Search,
-    color: 'amber',
-    x: 20,
-    y: 28,
-    desc: 'CRUD research snippets + tags.',
-    primary: false,
-  },
-  {
-    id: 'logs',
-    label: 'System Logs',
-    sub: 'Audit trail',
-    icon: FileText,
-    color: 'red',
-    x: 20,
-    y: 74,
-    desc: 'Filter and search system events.',
-    primary: false,
-  },
-] as const;
-
-// SVG edge definitions: from CoreTerminal (50,52) to each satellite node
-const EDGES = NODES.filter(n => !n.primary).map(n => ({
-  id: n.id,
-  x1: 50,
-  y1: 52,
-  x2: n.x,
-  y2: n.y,
-  color: COLOR_MAP[n.color],
-}));
-
 export default function NavigationHub({ onNavigate }: NavigationHubProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
+  const [stats, setStats] = useState<TelemetryMetricsV2 | null>(null);
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchData = async () => {
+    setLoading(true);
+    try {
+      const [s, ss] = await Promise.all([getAura().getStatsV2(), getAura().listSessionsV2()]);
+      setStats(s); setSessions(ss);
+    } catch (err) {
+      console.error('[NavigationHub]', err);
+    } finally { setLoading(false); }
+  };
+
+  useEffect(() => { fetchData(); }, []);
+
+  const liveCount = sessions.filter(s => s.state === 'running').length;
+
+  const depts: Dept[] = [
+    { n: '01', key: 'terminal', title: 'TERMINAL', sub: 'orchestration / streams',  meta: `${liveCount} LIVE`, Icon: TerminalIcon, accent: 'chart', lead: true },
+    { n: '02', key: 'roadmap',  title: 'ROADMAP',  sub: 'lanes / priority / roi',   meta: '14 CARDS', Icon: Map,        accent: 'ink' },
+    { n: '03', key: 'research', title: 'RESEARCH', sub: 'snippets / verifications', meta: '47 ENTRIES', Icon: BookMarked, accent: 'paper' },
+    { n: '04', key: 'roi',      title: 'ROI',      sub: 'latency / cost / routes',  meta: stats ? `$${stats.est_token_cost_usd.toFixed(2)}` : '—', Icon: BarChart3, accent: 'oxblood' },
+    { n: '05', key: 'logs',     title: 'LOGS',     sub: 'audit / ledger',           meta: '4,184', Icon: ScrollText, accent: 'paper' },
+    { n: '06', key: 'archive',  title: 'ARCHIVE',  sub: 'sessions / exports',       meta: `${sessions.filter(s => s.state === 'archived').length}`, Icon: Archive, accent: 'ink' },
+  ];
 
   return (
-    <div className="hub-canvas" ref={containerRef}>
-      {/* dot-grid background */}
-      <div className="hub-grid-bg" />
+    <div className="page">
+      <div className="page-body no-pad" style={{ padding: 0, position: 'relative', overflowX: 'hidden' }}>
+        {/* Gaffer-tape stamp */}
+        <div style={{
+          position: 'absolute', top: 16, right: -44, transform: 'rotate(8deg)',
+          background: 'var(--marigold)', border: '2px solid var(--rule)',
+          padding: '4px 56px', fontFamily: 'var(--font-mono)', fontSize: 10,
+          fontWeight: 700, letterSpacing: '0.18em', boxShadow: 'var(--shadow-hard)', zIndex: 5,
+        }}>v1.0 · LOCAL ONLY</div>
 
-      {/* ambient center glow */}
-      <div
-        style={{
-          position: 'absolute',
-          left: '50%',
-          top: '52%',
-          transform: 'translate(-50%, -50%)',
-          width: 600,
-          height: 400,
-          background: 'radial-gradient(ellipse, rgba(6,182,212,0.04) 0%, transparent 70%)',
-          pointerEvents: 'none',
-        }}
-      />
+        {/* Masthead */}
+        <div style={{ padding: '32px 36px 20px', borderBottom: 'var(--rule-heavy)' }}>
+          <div className="row" style={{ alignItems: 'flex-start', gap: 24 }}>
+            <div style={{
+              width: 132, height: 132, background: 'var(--ink)', color: 'var(--bone)',
+              border: '4px solid var(--rule)', boxShadow: '8px 8px 0 var(--rule)',
+              display: 'grid', placeItems: 'center',
+              fontFamily: 'var(--font-display)', fontStyle: 'italic',
+              fontSize: 96, lineHeight: 1, letterSpacing: '-0.08em', flexShrink: 0,
+            }}>Æ</div>
 
-      {/* edge lines */}
-      <svg
-        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
-        preserveAspectRatio="none"
-        viewBox="0 0 100 100"
-      >
-        <defs>
-          {EDGES.map(e => (
-            <linearGradient key={`g-${e.id}`} id={`grad-${e.id}`} x1={`${e.x1}%`} y1={`${e.y1}%`} x2={`${e.x2}%`} y2={`${e.y2}%`} gradientUnits="userSpaceOnUse">
-              <stop offset="0%" stopColor="#06b6d4" stopOpacity="0.25" />
-              <stop offset="100%" stopColor={e.color} stopOpacity="0.15" />
-            </linearGradient>
+            <div style={{ flex: 1 }}>
+              <div className="row" style={{ alignItems: 'center', gap: 8 }}>
+                <span className="tag filled">HUB</span>
+                <span className="caps" style={{ color: 'var(--text-2)' }}>
+                  {new Date().toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '.')} · LOCAL
+                </span>
+              </div>
+              <div style={{
+                fontFamily: 'var(--font-mono)', fontSize: 92, fontWeight: 700,
+                lineHeight: 0.85, letterSpacing: '-0.04em', textTransform: 'uppercase', marginTop: 6,
+              }}>
+                AURA<span style={{ color: 'var(--oxblood)' }}>/</span>CODE
+              </div>
+              <div className="caps" style={{ marginTop: 10, fontSize: 12, color: 'var(--text-2)' }}>
+                AN AGENT FOR LONG THINKING.&nbsp;&nbsp;NO CLOUD.&nbsp;&nbsp;NO TELEMETRY.&nbsp;&nbsp;NO NONSENSE.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Status bar — black brick */}
+        <div className="row" style={{
+          background: 'var(--ink)', color: 'var(--bone)',
+          borderBottom: 'var(--rule-heavy)',
+          padding: '10px 36px', gap: 32,
+          fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700, letterSpacing: '0.1em',
+        }}>
+          <span className="row" style={{ gap: 8 }}>
+            <span className="dot live" /> {liveCount} ROUTES LIVE
+          </span>
+          <span>↳ LATENCY {stats ? (stats.avg_latency_ms / 1000).toFixed(2) + 's' : '—'}</span>
+          <span>↳ SUCCESS {stats ? (stats.success_rate * 100).toFixed(1) + '%' : '—'}</span>
+          <span>↳ BUDGET ${stats ? stats.est_token_cost_usd.toFixed(2) : '—'} / $200.00</span>
+          <span style={{ flex: 1 }} />
+          <span><Command size={11} style={{ verticalAlign: -1 }} /> K → SUMMON</span>
+        </div>
+
+        {/* Department slabs */}
+        <div style={{
+          padding: 28,
+          display: 'grid',
+          gridTemplateColumns: 'repeat(4, 1fr)',
+          gridAutoRows: '180px',
+          gap: 18,
+        }}>
+          {depts.map((d, i) => {
+            const a = ACCENTS[d.accent];
+            const lead = d.lead;
+            return (
+              <motion.button
+                key={d.key}
+                onClick={() => onNavigate(d.key)}
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.04, duration: 0.25 }}
+                whileHover={{ x: -2, y: -2 }}
+                whileTap={{ x: 2, y: 2 }}
+                style={{
+                  gridColumn: lead ? 'span 2' : 'span 1',
+                  gridRow:    lead ? 'span 2' : 'span 1',
+                  background: a.bg, color: a.fg,
+                  border: '4px solid var(--rule)',
+                  boxShadow: lead ? '10px 10px 0 var(--rule)' : '8px 8px 0 var(--rule)',
+                  padding: lead ? 24 : 18,
+                  display: 'flex', flexDirection: 'column',
+                  position: 'relative', overflow: 'hidden',
+                  cursor: 'pointer', textAlign: 'left',
+                }}
+              >
+                {/* Big background numeral */}
+                <span style={{
+                  position: 'absolute', right: lead ? -20 : -10, bottom: lead ? -50 : -30,
+                  fontFamily: 'var(--font-mono)', fontWeight: 700,
+                  fontSize: lead ? 320 : 180, lineHeight: 0.8, letterSpacing: '-0.05em',
+                  color: a.fg, opacity: 0.08, pointerEvents: 'none',
+                }}>{d.n}</span>
+
+                <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{
+                    background: a.fg, color: a.bg,
+                    padding: '3px 8px', border: `1.5px solid ${a.fg}`,
+                    fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 700, letterSpacing: '0.18em',
+                  }}>§ {d.n}{lead ? ' / LEAD' : ''}</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 700, letterSpacing: '0.12em' }}>
+                    {d.meta}
+                  </span>
+                </div>
+
+                <div style={{ flex: 1 }} />
+
+                <d.Icon size={lead ? 28 : 20} strokeWidth={2.5} style={{ marginBottom: 8 }} />
+
+                <div style={{
+                  fontFamily: 'var(--font-mono)', fontWeight: 700,
+                  fontSize: lead ? 96 : 38, lineHeight: 0.95, letterSpacing: '-0.03em',
+                }}>{d.title}</div>
+
+                <div className="caps" style={{ marginTop: 6, fontSize: 11, opacity: 0.85 }}>
+                  {d.sub}
+                </div>
+
+                {lead && (
+                  <div className="row" style={{ marginTop: 16, gap: 10 }}>
+                    <span style={{
+                      background: 'var(--ink)', color: 'var(--bone)',
+                      border: '2px solid var(--rule)',
+                      padding: '8px 14px',
+                      fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700, letterSpacing: '0.14em',
+                    }}>RESUME ⏎</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 700 }}>
+                      ↳ {sessions[0]?.name || '—'} · {(sessions[0]?.token_count ?? 0).toLocaleString()} TOK
+                    </span>
+                  </div>
+                )}
+              </motion.button>
+            );
+          })}
+        </div>
+
+        {/* Recent strip */}
+        <div className="row" style={{
+          borderTop: 'var(--rule-heavy)', background: 'var(--card-alt)',
+          padding: '14px 36px', gap: 28,
+          fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 700, letterSpacing: '0.16em',
+        }}>
+          <span>RECENT:</span>
+          {sessions.slice(0, 4).map((s, i) => (
+            <span key={s.id} style={{ paddingRight: 28, borderRight: i < 3 ? '2px solid var(--rule)' : 'none' }}>
+              {s.name.toUpperCase().replace(/\s+/g, '-')} · {new Date(s.created_at).toTimeString().slice(0, 5)}
+            </span>
           ))}
-        </defs>
-        {EDGES.map((e, i) => (
-          <motion.line
-            key={e.id}
-            x1={e.x1}
-            y1={e.y1}
-            x2={e.x2}
-            y2={e.y2}
-            stroke={`url(#grad-${e.id})`}
-            strokeWidth="0.3"
-            strokeDasharray="2 1.5"
-            initial={{ pathLength: 0, opacity: 0 }}
-            animate={{ pathLength: 1, opacity: 1 }}
-            transition={{ delay: 0.1 + i * 0.08, duration: 0.7, ease: 'easeOut' }}
-          />
-        ))}
-      </svg>
-
-      {/* nodes */}
-      {NODES.map((node, i) => {
-        const Icon = node.icon;
-        const accent = COLOR_MAP[node.color];
-        return (
-          <motion.div
-            key={node.id}
-            className="hub-node"
-            style={{
-              left: `${node.x}%`,
-              top: `${node.y}%`,
-              border: `1px solid ${accent}30`,
-              background: 'rgba(15,20,28,0.88)',
-              backdropFilter: 'blur(12px)',
-              boxShadow: node.primary ? `0 0 40px ${accent}18, inset 0 0 20px ${accent}06` : `0 0 20px ${accent}10`,
-              width: node.primary ? 220 : 188,
-            }}
-            initial={{ opacity: 0, y: 16, scale: 0.94 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            transition={{ delay: 0.05 + i * 0.07, duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
-            whileHover={{
-              scale: 1.06,
-              boxShadow: `0 0 36px ${accent}40, inset 0 0 24px ${accent}10`,
-              borderColor: `${accent}60`,
-            }}
-            whileTap={{ scale: 0.97 }}
-            onClick={() => onNavigate(node.id)}
-          >
-            {/* status dot */}
-            <span
-              style={{
-                position: 'absolute',
-                top: 10,
-                right: 10,
-                width: 5,
-                height: 5,
-                borderRadius: '50%',
-                background: accent,
-                boxShadow: `0 0 6px ${accent}`,
-                opacity: 0.8,
-              }}
-            />
-
-            {/* icon */}
-            <div style={{ marginBottom: 10 }}>
-              <Icon size={node.primary ? 22 : 18} color={accent} strokeWidth={1.5} />
-            </div>
-
-            {/* labels */}
-            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', lineHeight: 1.2, marginBottom: 2 }}>
-              {node.label}
-            </div>
-            <div style={{ fontSize: 9, color: accent, textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: 8 }}>
-              {node.sub}
-            </div>
-            <div style={{ fontSize: 9, color: 'var(--text-3)', lineHeight: 1.5 }}>
-              {node.desc}
-            </div>
-          </motion.div>
-        );
-      })}
-
-      {/* bottom label */}
-      <div
-        style={{
-          position: 'absolute',
-          bottom: 16,
-          left: '50%',
-          transform: 'translateX(-50%)',
-          fontSize: 9,
-          color: 'var(--text-4)',
-          letterSpacing: '0.15em',
-          textTransform: 'uppercase',
-          pointerEvents: 'none',
-        }}
-      >
-        Click a node to enter
+          {!loading && sessions.length === 0 && <span style={{ opacity: 0.5 }}>NO SESSIONS YET</span>}
+          <span style={{ flex: 1 }} />
+          <span style={{ opacity: 0.6 }}>SET IN JETBRAINS MONO 700</span>
+        </div>
       </div>
     </div>
   );
