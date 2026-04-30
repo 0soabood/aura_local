@@ -1,0 +1,79 @@
+.aura-app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background-color: #050505;
+  color: #d1d5db;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.aura-header {
+  padding: 1rem 1.5rem;
+  background: #000;
+  border-bottom: 1px solid #222;
+  font-size: 0.9rem;
+  letter-spacing: 1px;
+}
+
+.aura-main {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+
+.chat-thread-container {
+  height: 100%;
+  width: 100%;
+}
+
+.message-row {
+  padding: 1.5rem;
+  border-bottom: 1px solid #1a1a1a;
+}
+
+.message-row.user { background-color: #0a0a0a; }
+.message-row.assistant { background-color: #0f1011; }
+
+.message-header {
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  color: #6b7280;
+  font-size: 0.75rem;
+}
+
+.message-content pre {
+  background: #000;
+  padding: 1rem;
+  overflow-x: auto;
+  border: 1px solid #222;
+  border-radius: 4px;
+}
+
+.message-meta {
+  font-size: 0.7rem;
+  color: #4b5563;
+  margin-top: 1rem;
+}
+
+.chat-input-form {
+  display: flex;
+  padding: 1rem;
+  background: #000;
+  border-top: 1px solid #222;
+}
+
+.chat-input-form textarea {
+  flex: 1;
+  background: #0a0a0a;
+  color: #fff;
+  border: 1px solid #333;
+  padding: 0.75rem;
+  font-family: inherit;
+  resize: none;
+  height: 60px;
+}
+
+.chat-input-form button {
+  background: #222; color: #fff; border: 1px solid #444; padding: 0 1.5rem; margin-left: 1rem; cursor: pointer; transition: background 0.2s;
+}
+.chat-input-form button:hover { background: #333; }

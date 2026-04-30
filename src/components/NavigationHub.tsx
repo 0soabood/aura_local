@@ -29,13 +29,41 @@ const ACCENTS = {
 export default function NavigationHub({ onNavigate }: NavigationHubProps) {
   const [stats, setStats] = useState<TelemetryMetricsV2 | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [roadmapCount, setRoadmapCount] = useState(0);
+  const [researchCount, setResearchCount] = useState(0);
+  const [logsCount, setLogsCount] = useState(0);
   const [loading, setLoading] = useState(true);
 
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [s, ss] = await Promise.all([getAura().getStatsV2(), getAura().listSessionsV2()]);
-      setStats(s); setSessions(ss);
+      const aura = getAura();
+      
+      const getStats = async () => {
+        try { return await aura?.getStatsV2?.() ?? null; } catch { return null; }
+      };
+      const getSessions = async () => {
+        try { return await aura?.listSessionsV2?.() ?? []; } catch { return []; }
+      };
+      const getRoadmapCount = async () => {
+        try { const items = await aura?.listRoadmapItems?.() ?? []; return Array.isArray(items) ? items.length : 0; } catch { return 0; }
+      };
+      const getSnippetCount = async () => {
+        try { const items = await aura?.getSnippets?.() ?? []; return Array.isArray(items) ? items.length : 0; } catch { return 0; }
+      };
+      const getLogCount = async () => {
+        try { const items = await aura?.listLogs?.() ?? []; return Array.isArray(items) ? items.length : 0; } catch { return 0; }
+      };
+
+      const [s, ss, rCount, resCount, lCount] = await Promise.all([
+        getStats(), getSessions(), getRoadmapCount(), getSnippetCount(), getLogCount()
+      ]);
+
+      setStats(s);
+      setSessions(Array.isArray(ss) ? ss : []);
+      setRoadmapCount(typeof rCount === 'number' ? rCount : 0);
+      setResearchCount(typeof resCount === 'number' ? resCount : 0);
+      setLogsCount(typeof lCount === 'number' ? lCount : 0);
     } catch (err) {
       console.error('[NavigationHub]', err);
     } finally { setLoading(false); }
@@ -43,15 +71,19 @@ export default function NavigationHub({ onNavigate }: NavigationHubProps) {
 
   useEffect(() => { fetchData(); }, []);
 
-  const liveCount = sessions.filter(s => s.state === 'running').length;
+  const validSessions = Array.isArray(sessions) ? sessions.filter(s => s && typeof s === 'object') : [];
+  const liveCount = validSessions.filter(s => s.state === 'running').length;
+  const doneCount = validSessions.filter(s => s.state === 'done').length;
+  const errorCount = validSessions.filter(s => s.state === 'error').length;
 
+  const safeStats = stats && typeof stats === 'object' ? stats : null;
   const depts: Dept[] = [
-    { n: '01', key: 'terminal', title: 'TERMINAL', sub: 'orchestration / streams',  meta: `${liveCount} LIVE`, Icon: TerminalIcon, accent: 'chart', lead: true },
-    { n: '02', key: 'roadmap',  title: 'ROADMAP',  sub: 'lanes / priority / roi',   meta: '14 CARDS', Icon: Map,        accent: 'ink' },
-    { n: '03', key: 'research', title: 'RESEARCH', sub: 'snippets / verifications', meta: '47 ENTRIES', Icon: BookMarked, accent: 'paper' },
-    { n: '04', key: 'roi',      title: 'ROI',      sub: 'latency / cost / routes',  meta: stats ? `$${stats.est_token_cost_usd.toFixed(2)}` : '—', Icon: BarChart3, accent: 'oxblood' },
-    { n: '05', key: 'logs',     title: 'LOGS',     sub: 'audit / ledger',           meta: '4,184', Icon: ScrollText, accent: 'paper' },
-    { n: '06', key: 'archive',  title: 'ARCHIVE',  sub: 'sessions / exports',       meta: `${sessions.filter(s => s.state === 'archived').length}`, Icon: Archive, accent: 'ink' },
+    { n: '01', key: 'terminal', title: 'TERMINAL', sub: 'orchestration / streams',  meta: `${liveCount} LIVE · ${doneCount} DONE`, Icon: TerminalIcon, accent: 'chart', lead: true },
+    { n: '02', key: 'roadmap',  title: 'ROADMAP',  sub: 'lanes / priority / roi',   meta: `${roadmapCount} CARDS`, Icon: Map,        accent: 'ink' },
+    { n: '03', key: 'research', title: 'RESEARCH', sub: 'snippets / verifications', meta: `${researchCount} ENTRIES`, Icon: BookMarked, accent: 'paper' },
+    { n: '04', key: 'roi',      title: 'ROI',      sub: 'latency / cost / routes',  meta: safeStats ? `$${Number(safeStats.est_token_cost_usd || 0).toFixed(2)}` : '—', Icon: BarChart3, accent: 'oxblood' },
+    { n: '05', key: 'logs',     title: 'LOGS',     sub: 'audit / ledger',           meta: `${Number(logsCount || 0).toLocaleString()}`, Icon: ScrollText, accent: 'paper' },
+    { n: '06', key: 'archive',  title: 'ARCHIVE',  sub: 'sessions / exports',       meta: `${validSessions.filter(s => s.state === 'archived').length}`, Icon: Archive, accent: 'ink' },
   ];
 
   return (
@@ -177,7 +209,7 @@ export default function NavigationHub({ onNavigate }: NavigationHubProps) {
                   {d.sub}
                 </div>
 
-                {lead && (
+                {lead && validSessions.length > 0 && (
                   <div className="row" style={{ marginTop: 16, gap: 10 }}>
                     <span style={{
                       background: 'var(--ink)', color: 'var(--bone)',
@@ -186,7 +218,7 @@ export default function NavigationHub({ onNavigate }: NavigationHubProps) {
                       fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700, letterSpacing: '0.14em',
                     }}>RESUME ⏎</span>
                     <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 700 }}>
-                      ↳ {sessions[0]?.name || '—'} · {(sessions[0]?.token_count ?? 0).toLocaleString()} TOK
+                      ↳ {validSessions[0]?.name || '—'} · {Number(validSessions[0]?.token_count || 0).toLocaleString()} TOK
                     </span>
                   </div>
                 )}
@@ -202,12 +234,18 @@ export default function NavigationHub({ onNavigate }: NavigationHubProps) {
           fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 700, letterSpacing: '0.16em',
         }}>
           <span>RECENT:</span>
-          {sessions.slice(0, 4).map((s, i) => (
-            <span key={s.id} style={{ paddingRight: 28, borderRight: i < 3 ? '2px solid var(--rule)' : 'none' }}>
-              {s.name.toUpperCase().replace(/\s+/g, '-')} · {new Date(s.created_at).toTimeString().slice(0, 5)}
-            </span>
-          ))}
-          {!loading && sessions.length === 0 && <span style={{ opacity: 0.5 }}>NO SESSIONS YET</span>}
+          {validSessions.slice(0, 4).map((s, i) => {
+            const isResumable = s && (s.state === 'done' || s.state === 'error');
+            const sessionName = s?.name ? String(s.name).toUpperCase().replace(/\s+/g, '-') : 'UNTITLED';
+            const sessionTime = s?.created_at ? (() => { try { return new Date(s.created_at).toTimeString().slice(0, 5); } catch { return '--:--'; } })() : '--:--';
+            return (
+              <span key={s?.id || i} style={{ paddingRight: 28, borderRight: i < 3 ? '2px solid var(--rule)' : 'none' }}>
+                {isResumable && <span title="Resumable session">↻ </span>}
+                {sessionName} · {sessionTime}
+              </span>
+            );
+          })}
+          {!loading && validSessions.length === 0 && <span style={{ opacity: 0.5 }}>NO SESSIONS YET</span>}
           <span style={{ flex: 1 }} />
           <span style={{ opacity: 0.6 }}>SET IN JETBRAINS MONO 700</span>
         </div>

@@ -26,14 +26,14 @@ export default function SystemLogs() {
 
   const fetchData = async () => {
     setLoading(true);
-    try { setLogs(await getAura().listLogs(200)); }
+    try { setLogs(await getAura()?.listLogs?.(200) ?? []); }
     catch (err) { console.error('[SystemLogs]', err); }
     finally { setLoading(false); }
   };
   useEffect(() => { fetchData(); }, []);
 
   const handleManual = async () => {
-    try { await getAura().createLog('audit', 'Manual', 'Manual entry from operator'); await fetchData(); }
+    try { await getAura()?.createLog?.('audit', 'Manual', 'Manual entry from operator'); await fetchData(); }
     catch (err) { console.error('[SystemLogs]', err); }
   };
 

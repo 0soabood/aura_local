@@ -15,7 +15,10 @@ export default function ROIDash() {
 
   const fetchData = async () => {
     setLoading(true);
-    try { setStats(await getAura().getStatsV2()); }
+    try { 
+      const data = await getAura()?.getStatsV2?.();
+      setStats(data || { total_routes: 0, avg_latency_ms: 0, success_rate: 0, est_token_cost_usd: 0, hourly_latency_ms: Array(24).fill(0), spend_series_usd: Array(24).fill(0) }); 
+    }
     catch (err) { console.error('[ROIDash]', err); }
     finally { setLoading(false); }
   };
@@ -105,12 +108,16 @@ export default function ROIDash() {
             </div>
             <div style={{ marginTop: 16, paddingTop: 12, borderTop: '2px dashed var(--rule)' }}>
               <div className="caps" style={{ marginBottom: 6 }}>TOP CONSUMERS</div>
-              {[['Design Sync', '$18.04'], ['Latency Test', '$12.91'], ['Token Burn', '$9.66']].map(([n, c]) => (
-                <div key={n} className="row" style={{ justifyContent: 'space-between', fontSize: 11, padding: '3px 0' }}>
-                  <span className="display" style={{ fontSize: 13 }}>{n}</span>
-                  <span className="mono">{c}</span>
-                </div>
-              ))}
+              {stats.top_consumers && stats.top_consumers.length > 0 ? (
+                stats.top_consumers.map((item) => (
+                  <div key={item.name} className="row" style={{ justifyContent: 'space-between', fontSize: 11, padding: '3px 0' }}>
+                    <span className="display" style={{ fontSize: 13 }}>{item.name}</span>
+                    <span className="mono">${item.cost.toFixed(2)}</span>
+                  </div>
+                ))
+              ) : (
+                <div className="mono" style={{ fontSize: 10, opacity: 0.5 }}>No expense data yet</div>
+              )}
             </div>
           </div>
         </div>

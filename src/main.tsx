@@ -1,11 +1,26 @@
-import {StrictMode} from 'react';
-import {createRoot} from 'react-dom/client';
-import './preload/index'; // must run before any component module so window.aura is ready
-import App from './App.tsx';
-import './index.css';
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import { createBrowserRouter, RouterProvider } from 'react-router-dom';
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
+import './index.css'; // Import Tailwind CSS
+
+import { AppLayout } from './components/AppLayout';
+import { ChatPage } from './components/ChatPage';
+import { RoadmapPage } from './components/RoadmapPage';
+
+const router = createBrowserRouter([
+  {
+    path: '/',
+    element: <AppLayout />,
+    children: [
+      { index: true, element: <ChatPage /> },
+      { path: 'roadmap', element: <RoadmapPage /> },
+    ],
+  },
+]);
+
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <RouterProvider router={router} />
+  </React.StrictMode>,
 );
