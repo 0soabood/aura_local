@@ -242,6 +242,16 @@ export interface AuraAPI {
   updateSnippet: (id: string, updates: Partial<ResearchSnippet>) => Promise<void>;
   deleteSnippet: (id: string) => Promise<void>;
   checkHealth: () => Promise<boolean>;
+  getActiveProvider: () => Promise<string>;
+  getAvailableModels: () => Promise<{
+    defaultModel: string;
+    providers: Array<{
+      id: string;
+      name: string;
+      hasKey: boolean;
+      models: Array<{ id: string; label: string }>;
+    }>;
+  } | null>;
 
   // v2: Supervisor routing (legacy)
   routeSupervisor: (task: Omit<SupervisorTask, 'depth'>) => Promise<SupervisorResponse>;
@@ -254,14 +264,33 @@ export interface AuraAPI {
   listSessions: () => Promise<OrchestrateSession[]>;
   getSessionEvents: (sessionId: string) => Promise<BlackboardEvent[]>;
   deleteSession: (sessionId: string) => Promise<void>;
+  updateSession: (sessionId: string, updates: { title: string }) => Promise<void>;
+
+  // ROI
+  getRoiEvents: () => Promise<ROIEvent[]>;
+  createRoiEvent: (data: Partial<ROIEvent>) => Promise<{ id: string }>;
+  updateRoiEvent: (id: string, updates: Partial<ROIEvent>) => Promise<void>;
+  deleteRoiEvent: (id: string) => Promise<void>;
 
   // UI layer — brutalist design components
   getStatsV2: () => Promise<TelemetryMetricsV2>;
   listSessionsV2: () => Promise<Session[]>;
   streamOrchestrate: (
-    payload: { sessionId?: string; prompt: string },
-    onEvent: (e: OrchestrateEvent) => void,
+    payload: {
+      preferredModel?: any;
+      modelConfig?: Record<string, string>;
+      agentModelOverrides?: Record<string, string>;
+      sessionId?: string | null;
+      message?: string;
+      prompt?: string;
+      debug?: boolean;
+    },
+    onEvent: (event: string, data: any) => void,
   ) => Promise<void>;
+
+  // Settings persistence
+  saveSettings: (settings: any) => Promise<void>;
+  loadSettings: () => Promise<any>;
 }
 
 // ── UI design-layer additions ─────────────────────────────────────────────────
@@ -297,6 +326,7 @@ export interface TelemetryMetricsV2 {
   est_token_cost_usd: number;
   hourly_latency_ms: number[]; // 24 buckets
   spend_series_usd: number[];
+  top_consumers?: { name: string; cost: number }[]; // Live aggregation by source
 }
 
 declare global {
@@ -314,8 +344,7 @@ export const EVENT_TYPES = [
   'synthesis_complete',
   'escalation_required',
   'code_written',
-  'code_context_retrieved',
-  'blackboard_update',
+  'code_context_retrieved'
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -325,6 +354,7 @@ export const AGENT_NAMES = [
   'code_agent',
   'synthesis_agent',
   'orchestrator',
+  'supervisor_agent',
 ] as const;
 
 export type AgentName = (typeof AGENT_NAMES)[number];

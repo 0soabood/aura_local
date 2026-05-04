@@ -3,38 +3,11 @@ import { BaseAgent } from './types';
 import { readFileDef, readFileFn } from '../tools/builtin/read_file';
 import { listDirectoryDef, listDirectoryFn } from '../tools/builtin/list_directory';
 import { ToolRegistry } from '../tools/registry';
+import { peekFallbackChain, resolveModel } from '../ModelConfig';
+import { buildResearchPrompt } from '../prompts/AgentWiring';
 
 const RESEARCH_RE =
   /\b(research|find|search|market|analyze|analyse|trend|intel|report|price|news|data|what is|who is|how does|when did|where is|why does|benchmark|compare|survey)\b/i;
-
-const PRIMARY_ROUTING = 'groq:compound-beta-mini';
-
-const SYSTEM_PROMPT =
-  'You are the Research Agent — an expert analyst and information synthesizer. ' +
-  'You retrieve, verify, and distill knowledge with rigorous attention to factual accuracy.\n\n' +
-
-  'RESEARCH STANDARDS:\n' +
-  '- Prioritise accuracy over speed. If you are uncertain about a fact, say so explicitly.\n' +
-  '- Distinguish between established facts, expert consensus, and contested claims.\n' +
-  '- When citing data (numbers, dates, statistics), state the source or acknowledge uncertainty.\n' +
-  '- Do not hallucinate citations. If you cannot verify a source, omit the reference.\n' +
-  '- Synthesise information into clear, structured answers — not raw dumps of facts.\n\n' +
-
-  'APPROACH:\n' +
-  '1. Identify the core question behind the user\'s request before answering.\n' +
-  '2. If the question has multiple dimensions, address each one explicitly.\n' +
-  '3. Use headers and bullet points for complex answers. Use prose for simple ones.\n' +
-  '4. If prior agents have already contributed context, build on it — do not repeat it.\n' +
-  '5. Close with a concise summary if the answer is longer than 3 paragraphs.\n\n' +
-
-  'TOOL EXECUTION RULES:\n' +
-  '- Ensure all string values in function call arguments are properly JSON-escaped.\n\n' +
-
-  'OUTPUT FORMAT:\n' +
-  '- Lead with the direct answer to the question.\n' +
-  '- Follow with supporting evidence or explanation.\n' +
-  '- Flag any significant uncertainty or knowledge cutoff at the end.\n' +
-  '- Do not add meta-commentary such as "As an AI..." or "Based on my training...".';
 
 /**
  * ResearchAgent — backed by Groq compound-beta-mini (search-augmented).
@@ -47,12 +20,24 @@ const SYSTEM_PROMPT =
 export class ResearchAgent extends BaseAgent {
   readonly name = 'research_agent' as const;
 
+  private getHealthyModel(): string | undefined {
+    return peekFallbackChain('long_context').find(m => this.isProviderHealthy(m));
+  }
+
   evaluate(events: BlackboardEvent[]): AgentBid {
-    if (!this.isProviderHealthy(PRIMARY_ROUTING)) {
+    if (!this.getHealthyModel()) {
       return { agentName: 'research_agent', confidence: 0.0, proposedAction: 'Research provider unavailable.', expectedOutputShape: 'text' };
     }
 
     const userMsg = this.userMessage(events).toLowerCase();
+    let isResearchMatch = RESEARCH_RE.test(userMsg);
+
+    const isContinuation = userMsg.length < 50 && /go ahead|do it|yes|yep|sure|ok|okay|proceed|continue|next/i.test(userMsg);
+    if (!isResearchMatch && isContinuation) {
+      const userMsgs = events.filter(e => e.event_type === 'user_message');
+      const prevMsg = userMsgs.at(-2)?.content.toLowerCase() ?? '';
+      isResearchMatch = RESEARCH_RE.test(prevMsg);
+    }
     const alreadyRan = this.outputsBy(events, 'research_agent').length > 0;
 
     const lastError = [...events].reverse().find(e => e.event_type === 'execution_error') ?? null;
@@ -63,7 +48,7 @@ export class ResearchAgent extends BaseAgent {
     let confidence = 0;
     let proposedAction = 'Retrieve web-sourced intelligence via Groq compound-beta-mini';
 
-    if (!alreadyRan && RESEARCH_RE.test(userMsg)) {
+    if (!alreadyRan && isResearchMatch) {
       confidence = 0.85;
     } else if (errorWasResearch) {
       confidence = 0.65;
@@ -81,12 +66,20 @@ export class ResearchAgent extends BaseAgent {
   }
 
   async execute(events: BlackboardEvent[], bid: AgentBid): Promise<AgentOutput> {
+    const SYSTEM_PROMPT = buildResearchPrompt({
+      sessionPhase: events.length < 3 ? 'initial' : 'ongoing',
+    });
+
     const messages = this.buildMessages(events, SYSTEM_PROMPT);
     const reg = this.buildResearchToolRegistry();
 
+    let model = resolveModel('long_context');
+    if (!this.isProviderHealthy(model)) model = this.getHealthyModel() as string;
+
     const reactResult = await this.runReactLoop(
+      events[0]?.session_id || 'unknown',
       messages,
-      PRIMARY_ROUTING,
+      model,
       reg.describe(),
       reg,
       { temperature: 0.0 },

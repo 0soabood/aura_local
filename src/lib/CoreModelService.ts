@@ -1,4 +1,5 @@
 import { GoogleGenAI } from "@google/genai";
+import { resolveModel } from "./ModelConfig";
 
 const PROMPT_TEMPLATE = `
 Analyze the following command and provide a structured technical response.
@@ -34,17 +35,18 @@ export class CoreModelService {
     this.ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY as string });
   }
 
-  async execute(prompt: string, modelId: string = "gemini-3-flash-preview") {
+  async execute(prompt: string, modelId?: string) {
     const startTime = Date.now();
+    const targetModel = modelId || resolveModel('daily_driver').split(':').pop() || "gemini-2.5-flash";
     
     // 1. Prepare structured prompt
     const finalPrompt = PROMPT_TEMPLATE
       .replace("{{prompt}}", prompt)
-      .replace("{{model}}", modelId);
+      .replace("{{model}}", targetModel);
 
     try {
       const response = await this.ai.models.generateContent({
-        model: modelId,
+        model: targetModel,
         contents: finalPrompt,
         config: {
             temperature: 0.2, // Consistent results for terminal execution

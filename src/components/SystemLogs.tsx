@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { Plus, Search } from 'lucide-react';
 import type { SystemLog, LogLevel } from '../shared/types';
 import { Spinner, SectionNum } from './ui/atoms';
+import { VirtualList } from './ui/VirtualList';
 
 const getAura = () => (window as any).aura;
 
@@ -80,24 +81,35 @@ export default function SystemLogs() {
         <div style={{ width: 70, textAlign: 'right' }}>№</div>
       </div>
 
-      <div style={{ flex: 1, overflow: 'auto' }}>
-        {loading ? <div style={{ padding: 16 }}><Spinner /></div> : visible.map((e, i) => (
-          <div key={e.id} className="row" style={{
-            padding: '8px 20px', borderBottom: '1px solid var(--rule)',
-            fontFamily: 'var(--font-mono)', fontSize: 11, lineHeight: 1.4,
-            background: i % 2 === 1 ? 'var(--paper)' : 'transparent', alignItems: 'flex-start',
-          }}>
-            <div style={{ width: 90, color: 'var(--text-2)' }}>{new Date(e.created_at).toTimeString().slice(0, 8)}</div>
-            <div style={{ width: 80 }}>
-              <span style={{ display: 'inline-block', padding: '1px 6px', background: lvlBg(e.level), color: lvlFg(e.level),
-                fontWeight: 700, fontSize: 9, letterSpacing: '0.14em', border: '1.5px solid var(--rule)' }}>{e.level.toUpperCase()}</span>
-            </div>
-            <div style={{ width: 130, fontWeight: 700 }}>{e.module}</div>
-            <div style={{ flex: 1 }}>{e.message}</div>
-            <div style={{ width: 70, textAlign: 'right', color: 'var(--text-3)' }}>№ {String(logs.length - i).padStart(4, '0')}</div>
-          </div>
-        ))}
-        {!loading && visible.length === 0 && <div style={{ padding: 20 }}><div className="empty">NO ENTRIES MATCH</div></div>}
+      <div style={{ flex: 1, overflow: 'hidden' }}>
+        {loading ? (
+          <div style={{ padding: 16 }}><Spinner /></div>
+        ) : visible.length === 0 ? (
+          <div style={{ padding: 20 }}><div className="empty">NO ENTRIES MATCH</div></div>
+        ) : (
+          <VirtualList
+            items={visible}
+            getItemKey={(item) => item.id}
+            renderItem={(item, index) => (
+              <div className="row" style={{
+                padding: '8px 20px', borderBottom: '1px solid var(--rule)',
+                fontFamily: 'var(--font-mono)', fontSize: 11, lineHeight: 1.4,
+                background: index % 2 === 1 ? 'var(--paper)' : 'transparent',
+                alignItems: 'flex-start',
+              }}>
+                <div style={{ width: 90, color: 'var(--text-2)' }}>{new Date(item.created_at).toTimeString().slice(0, 8)}</div>
+                <div style={{ width: 80 }}>
+                  <span style={{ display: 'inline-block', padding: '1px 6px', background: lvlBg(item.level), color: lvlFg(item.level),
+                    fontWeight: 700, fontSize: 9, letterSpacing: '0.14em', border: '1.5px solid var(--rule)' }}>{item.level.toUpperCase()}</span>
+                </div>
+                <div style={{ width: 130, fontWeight: 700 }}>{item.module}</div>
+                <div style={{ flex: 1 }}>{item.message}</div>
+                <div style={{ width: 70, textAlign: 'right', color: 'var(--text-3)' }}>№ {String(visible.length - index).padStart(4, '0')}</div>
+              </div>
+            )}
+            height="100%"
+          />
+        )}
       </div>
 
       <div className="row" style={{ borderTop: 'var(--rule-heavy)', padding: '10px 20px', background: 'var(--paper)',

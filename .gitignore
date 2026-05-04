@@ -4,8 +4,16 @@ dist/
 coverage/
 .DS_Store
 *.log
+*.bak
+*.new
 .env*
 !.env.example
+archives/
+
+# Docker secrets - prevent secret files from being committed
+docker/secrets/*
+!docker/secrets/.gitkeep
+!docker/secrets/template.env
 
 # Runtime SQLite database (dev only)
 aura.db*

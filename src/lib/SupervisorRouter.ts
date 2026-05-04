@@ -1,8 +1,6 @@
 import { SupervisorTask, SupervisorResponse, SupervisorPlan, Step, SupervisorDomain } from '../shared/types';
 import { ProviderRegistry } from './providers/ProviderRegistry';
-import { GeminiProvider } from './providers/GeminiProvider';
-import { GroqProvider } from './providers/GroqProvider';
-import { CodexCliProvider } from './providers/CodexCliProvider';
+import { resolveModel } from './ModelConfig';
 import { Blackboard } from './Blackboard';
 import { SupervisorStatsRepository } from '../db/repositories/SupervisorStatsRepository';
 import { DOMAIN_CONFIG, buildSupervisorPrompt, classifyDomain, assembleSystemPrompt } from './supervisors/prompts';
@@ -22,16 +20,11 @@ const MAX_ESCALATION_DEPTH = 2;
  *   7. Handle escalation (depth-limited) recursively
  */
 export class SupervisorRouter {
-  private registry: ProviderRegistry;
-  private blackboard: Blackboard;
+  private readonly registry: ProviderRegistry;
+  private readonly blackboard: Blackboard;
 
   constructor() {
     this.registry = new ProviderRegistry();
-    this.registry
-      .register(new GeminiProvider())
-      .register(new GroqProvider())
-      .register(new CodexCliProvider());
-
     this.blackboard = new Blackboard();
   }
 
@@ -98,8 +91,10 @@ export class SupervisorRouter {
         console.error(`[SupervisorRouter] Step failed (model: ${step.model}):`, err.message);
         // Attempt Groq fallback for failed steps
         try {
+          const fallbackModel = resolveModel(config.fallbackRole);
+          console.warn(`[SupervisorRouter] Step failed on ${step.model}, falling back to ${fallbackModel}`);
           const fallback = await this.registry.call(
-            'groq:llama-3.3-70b-versatile',
+            fallbackModel,
             step.prompt,
             { temperature: 0.3, systemPrompt: workerSystemPrompt },
           );
@@ -183,7 +178,7 @@ export class SupervisorRouter {
   /** Minimal one-step plan used when the supervisor call itself fails */
   private fallbackPlan(domain: SupervisorDomain, objective: string): SupervisorPlan {
     const config = DOMAIN_CONFIG[domain];
-    const fallbackModel = config.workerRoutings.at(-1) ?? 'groq:llama-3.3-70b-versatile';
+    const fallbackModel = resolveModel(config.fallbackRole);
     return {
       model_sequence:    [fallbackModel],
       reasoning:         'Supervisor call failed — executing direct fallback.',
@@ -205,4 +200,3 @@ export class SupervisorRouter {
     return classifyDomain(text);
   }
 }
-

@@ -24,6 +24,7 @@ import {
 } from '../shared/types';
 import { compiledGraph } from './graph/workflow';
 import { HumanMessage, AIMessage } from '@langchain/core/messages';
+import { broadcastEvent } from './debug';
 
 const MAX_LOOPS = 6;
 
@@ -61,7 +62,7 @@ const CODE_EXTRA_KEYWORDS = [
 // even below threshold, rather than defaulting to synthesis.
 const DOMAIN_WORDS = new Set([
   'what', 'how', 'why', 'code', 'write', 'research',
-  'find', 'explain', 'build', 'create', 'debug', 'fix',
+  'find', 'explain', 'build', 'create', 'debug', 'fix', 'file', 'folder', 'directory', 'read', 'path',
 ]);
 
 function isSynthesisGreeting(text: string): boolean {
@@ -115,6 +116,11 @@ export class ReactiveOrchestrator {
     ];
   }
 
+  private appendAndBroadcast(sessionId: string, event_type: EventType | string, author: string, content: string, metadata?: any) {
+    BlackboardEventRepository.append(sessionId, event_type as EventType, author as any, content, metadata);
+    broadcastEvent(sessionId, { event_type, author, content, metadata });
+  }
+
   async run(task: OrchestratorTask): Promise<OrchestratorResult> {
     if (process.env.USE_LANGGRAPH === 'true') {
       return this.runGraph(task);
@@ -126,7 +132,7 @@ export class ReactiveOrchestrator {
     let terminationReason: OrchestratorTermination = 'max_loops';
 
     // Seed the ledger with the user's message.
-    BlackboardEventRepository.append(sessionId, 'user_message', 'user', message);
+    this.appendAndBroadcast(sessionId, 'user_message', 'user', message);
 
     try { task.onProgress?.('status', { message: 'Orchestrator started...' }); } catch { /* ignore callback errors */ }
 
@@ -149,7 +155,17 @@ export class ReactiveOrchestrator {
       }
 
       // Fan-out evaluation — synchronous, zero LLM cost.
-      const rawBids: AgentBid[] = this.agents.map(a => a.evaluate(currentTurnEvents));
+      const rawBids: AgentBid[] = this.agents.map(a => a.evaluate(events));
+
+      // Broadcast bids for debugging
+      rawBids.forEach(bid => {
+        broadcastEvent(sessionId, {
+          event_type: 'agent_bid',
+          agentName: bid.agentName,
+          confidence: bid.confidence,
+          content: bid.proposedAction
+        });
+      });
 
       const lastUserMsg = currentTurnEvents.find(e => e.event_type === 'user_message')?.content ?? '';
 
@@ -240,7 +256,7 @@ export class ReactiveOrchestrator {
 
         if (!anyHealthy) {
           terminationReason = 'no_bid';
-          BlackboardEventRepository.append(
+          this.appendAndBroadcast(
             sessionId,
             'escalation_required',
             'orchestrator',
@@ -304,7 +320,7 @@ export class ReactiveOrchestrator {
           output = await this.callWithFallback(events, winner);
         }
 
-        BlackboardEventRepository.append(
+        this.appendAndBroadcast(
           sessionId,
           output.event_type,
           winner.agentName,
@@ -324,7 +340,7 @@ export class ReactiveOrchestrator {
         }
       } catch (err: any) {
         console.error(`[Orchestrator] ${winner.agentName} execute() threw:`, err.message);
-        BlackboardEventRepository.append(
+        this.appendAndBroadcast(
           sessionId,
           'execution_error',
           'orchestrator',
@@ -362,7 +378,7 @@ export class ReactiveOrchestrator {
     const start = Date.now();
 
     // Seed the legacy ledger
-    BlackboardEventRepository.append(sessionId, 'user_message', 'user', message);
+    this.appendAndBroadcast(sessionId, 'user_message', 'user', message);
     try { task.onProgress?.('status', { message: 'LangGraph Orchestrator started...' }); } catch { /* ignore */ }
 
     // Load persistent history from the Blackboard to seed the Graph
@@ -401,12 +417,22 @@ export class ReactiveOrchestrator {
 
     // Extract the final synthesized state
     const finalState = await compiledGraph.getState(config);
-    const finalMessages = finalState.values.chatHistory;
+    const finalMessages = finalState.values?.chatHistory || [];
     const lastMsg = finalMessages[finalMessages.length - 1];
-    const finalContent = lastMsg ? (lastMsg.content as string) : 'No response generated.';
+    const rawContent = lastMsg ? (lastMsg.content as string) : 'No response generated.';
 
-    BlackboardEventRepository.append(sessionId, 'synthesis_complete', 'synthesis_agent', finalContent, { graph_mode: true });
-    try { task.onProgress?.('agent_complete', { agent: 'synthesis_agent', result: finalContent }); } catch { /* ignore */ }
+    const isError = rawContent.startsWith('[execution_error]:');
+    const eventType: EventType = isError ? 'escalation_required' : 'synthesis_complete';
+    const finalContent = isError ? rawContent.replace(/^\[execution_error\]:\s*/, '') : rawContent;
+
+    this.appendAndBroadcast(sessionId, eventType, 'synthesis_agent', finalContent, { graph_mode: true });
+    try { 
+      if (isError) {
+        task.onProgress?.('error', { message: finalContent });
+      } else {
+        task.onProgress?.('agent_complete', { agent: 'synthesis_agent', result: finalContent }); 
+      }
+    } catch { /* ignore */ }
 
     return {
       sessionId,
@@ -414,7 +440,7 @@ export class ReactiveOrchestrator {
       finalResponse: finalContent,
       totalLoops: 1, // Graph execution is represented as 1 synchronous block to the legacy API
       totalLatencyMs: Date.now() - start,
-      terminationReason: 'synthesis_complete',
+      terminationReason: eventType as OrchestratorTermination,
     };
   }
 

@@ -16,8 +16,8 @@ describe('ResearchAgent', () => {
   beforeEach(() => {
     registry = new ProviderRegistry();
     agent = new ResearchAgent(registry);
-    // groq is the primary provider for research_agent
-    vi.spyOn(registry, 'listProviders').mockReturnValue(['groq']);
+    // vertex is the primary provider for 'long_context'
+    vi.spyOn(registry, 'getAvailableProviders').mockReturnValue([{ id: 'vertex' } as any]);
   });
 
   describe('evaluate()', () => {
@@ -44,7 +44,7 @@ describe('ResearchAgent', () => {
     });
 
     it('returns 0 when primary provider is unavailable', () => {
-      vi.spyOn(registry, 'listProviders').mockReturnValue([]);
+      vi.spyOn(registry, 'getAvailableProviders').mockReturnValue([]);
       const events: BlackboardEvent[] = [
         evt({ event_type: 'user_message', author: 'user', content: 'research AI trends' }),
       ];
@@ -56,8 +56,8 @@ describe('ResearchAgent', () => {
     it('returns agent_output with text when no executed_tools present', async () => {
       vi.spyOn(registry, 'call').mockResolvedValue({
         text: 'Here is the research result',
-        model: 'compound-beta-mini',
-        provider: 'groq',
+        model: 'gemini-2.5-pro',
+        provider: 'vertex',
         latencyMs: 200,
         rateLimited: false,
       } as any);
@@ -73,8 +73,8 @@ describe('ResearchAgent', () => {
     it('returns agent_output with provider text (executed_tools no longer surfaced)', async () => {
       vi.spyOn(registry, 'call').mockResolvedValue({
         text: 'Research findings on the AI market.',
-        model: 'compound-beta-mini',
-        provider: 'groq',
+        model: 'gemini-2.5-pro',
+        provider: 'vertex',
         latencyMs: 300,
         rateLimited: false,
         // executed_tools was a Groq-specific field; runReactLoop no longer surfaces it.

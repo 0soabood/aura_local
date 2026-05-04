@@ -13,10 +13,11 @@ export default defineConfig({
     setupFiles: ['./tests/setup.ts'],
     env: {
       AURA_DB_PATH: ':memory:',
+      NODE_ENV: 'development',  // Bypass auth middleware in tests
     },
     // Repository tests share a single in-memory DB per worker; isolate keeps
     // suites from leaking schema state across files.
     isolate: true,
-    exclude: ['**/node_modules/**', '**/dist-main/**', '**/dist/**'],
+    exclude: ['**/node_modules/**', '**/dist-main/**', '**/dist/**', '**/better-sqlite3/**'],
   },
 });

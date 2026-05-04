@@ -42,4 +42,39 @@ export const AuraStateSchema = Annotation.Root({
     reducer: (state, update) => update,
     default: () => 'orchestrator',
   }),
+
+  // 5. User-selected model override (optional)
+  // When provided, the synthesis node will use this model instead of the default.
+  preferredModel: Annotation<string>({
+    reducer: (state, update) => update,
+    default: () => '',
+  }),
+
+  // 5b. Per-Role Model Configuration (from Zustand store)
+  // Maps role names to model IDs (e.g., 'daily_driver' -> 'google:gemini-2.5-flash')
+  modelConfig: Annotation<Record<string, string>>({
+    reducer: (state, update) => ({ ...state, ...update }),
+    default: () => ({}),
+  }),
+
+  // 5c. Per-Agent Model Overrides (from Zustand store)
+  // Maps agent names to model IDs (e.g., 'CodeAgent' -> 'vertex:gemini-2.5-pro')
+  agentModelOverrides: Annotation<Record<string, string>>({
+    reducer: (state, update) => ({ ...state, ...update }),
+    default: () => ({}),
+  }),
+
+  // 6. Session ID for debug broadcasting
+  // Used to route WebSocket debug events to the correct session clients.
+  sessionId: Annotation<string>({
+    reducer: (state, update) => update,
+    default: () => '',
+  }),
+
+  // 7. Energy mode (optional)
+  // 'low' = concise responses, 'high' = detailed responses
+  energyMode: Annotation<string>({
+    reducer: (state, update) => update,
+    default: () => 'high',
+  }),
 });

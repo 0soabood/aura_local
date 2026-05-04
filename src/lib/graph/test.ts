@@ -2,7 +2,7 @@ import { config } from 'dotenv';
 config({ path: '.env.local' }); // Load API keys for the standalone test
 
 import { HumanMessage } from '@langchain/core/messages';
-import { compiledGraph } from './workflow';
+import { compiledGraph, checkpointer } from './workflow';
 
 async function runTest() {
   console.log('--- Starting LangGraph Prototype ---');

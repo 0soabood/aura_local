@@ -21,7 +21,7 @@ export default function RoadmapView() {
 
   const fetchData = async () => {
     setLoading(true);
-    try { setItems(await getAura().listRoadmapItems()); }
+    try { setItems(await getAura()?.listRoadmapItems?.() ?? []); }
     catch (err) { console.error('[RoadmapView]', err); }
     finally { setLoading(false); }
   };
@@ -29,14 +29,14 @@ export default function RoadmapView() {
 
   const handleCreate = async () => {
     try {
-      await getAura().createRoadmapItem({ title: 'New item', status: 'backlog', priority: 0, roi_score: 0, lane: 'ux', tags: '[]' });
+      await getAura()?.createRoadmapItem?.({ title: 'New item', status: 'backlog', priority: 0, roi_score: 0, lane: 'ux', tags: '[]' });
       await fetchData();
     } catch (err) { console.error('[RoadmapView]', err); }
   };
 
   const handleDrop = async (status: RoadmapStatus) => {
     if (!draggingId) return;
-    try { await getAura().updateRoadmapItem(draggingId, { status }); await fetchData(); }
+    try { await getAura()?.updateRoadmapItem?.(draggingId, { status }); await fetchData(); }
     catch (err) { console.error('[RoadmapView]', err); }
     finally { setDraggingId(null); }
   };

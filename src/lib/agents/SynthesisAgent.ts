@@ -1,40 +1,12 @@
 import { AgentBid, AgentOutput, BlackboardEvent } from '../../shared/types';
 import { BaseAgent } from './types';
 import { writeMemoryDef, writeMemoryFn } from '../tools/builtin/write_memory';
+import { writeFileDef, writeFileFn } from '../tools/builtin/write_file';
+import { editFileDef, editFileFn } from '../tools/builtin/edit_file';
+import { runCommandDef, runCommandFn } from '../tools/builtin/run_command';
 import { ToolRegistry } from '../tools/registry';
-
-const SYNTHESIS_MODELS = [
-  'anthropic:claude-3-5-sonnet-latest',
-  'openai:gpt-4o',
-  'groq:llama-3.1-8b-instant',
-  'gemini:gemini-2.5-flash',
-  'openrouter:auto'
-];
-
-const SYSTEM_PROMPT =
-  'You are the Synthesis Agent — a world-class editor and communicator. ' +
-  'Your sole job is to produce the final, polished response the user actually reads.\n\n' +
-
-  'SYNTHESIS MODE (when other agents have produced output):\n' +
-  '- Combine the outputs from sibling agents (research_agent, code_agent) into a single, ' +
-  '  coherent response that directly answers the user\'s original request.\n' +
-  '- Preserve all factual content and code. Do not summarise away important detail.\n' +
-  '- Resolve any contradictions between agent outputs. If they disagree, acknowledge it.\n' +
-  '- Remove redundancy. If two agents said the same thing, say it once — better.\n' +
-  '- Maintain a consistent voice and reading level throughout.\n\n' +
-
-  'CONVERSATIONAL MODE (when no specialist has run):\n' +
-  '- Respond directly and naturally to greetings, meta-questions, or vague inputs.\n' +
-  '- Be concise. If the question is simple, the answer should be simple.\n' +
-  '- You may briefly describe your capabilities if asked, but do not over-explain.\n\n' +
-
-  'STRICT OUTPUT RULES:\n' +
-  '- Never begin with "Certainly!", "Great!", "Of course!" or similar filler.\n' +
-  '- Never add meta-commentary such as "Based on the agent outputs above..." or ' +
-  '  "As the Synthesis Agent, I will now...".\n' +
-  '- Never reveal internal agent names, confidence scores, or orchestration details ' +
-  '  unless the user explicitly asked how the system works.\n' +
-  '- The response you produce IS the final answer. Make it worthy of that.';
+import { peekFallbackChain, resolveModel } from '../ModelConfig';
+import { buildSynthesisPrompt } from '../prompts/AgentWiring';
 
 /**
  * SynthesisAgent — backed by Gemini Flash.
@@ -52,8 +24,8 @@ const SYSTEM_PROMPT =
 export class SynthesisAgent extends BaseAgent {
   readonly name = 'synthesis_agent' as const;
 
-  private getHealthyModel(): string | undefined {
-    return SYNTHESIS_MODELS.find(m => this.isProviderHealthy(m));
+  protected getHealthyModel(): string | undefined {
+    return peekFallbackChain('agent_orchestrator').find(m => this.isProviderHealthy(m));
   }
 
   evaluate(events: BlackboardEvent[]): AgentBid {
@@ -71,31 +43,63 @@ export class SynthesisAgent extends BaseAgent {
       return this.bid(0, 'nothing to synthesise');
     }
 
-    const agentOutputs = events.filter(e => e.event_type === 'agent_output' || e.event_type === 'code_written');
+    const pendingTask = events.find(e => (e.event_type as string) === 'task_proposed');
 
-    // Mode 1: rich synthesis — at least one other agent has produced output.
-    if (agentOutputs.length >= 1 && (last?.event_type === 'agent_output' || last?.event_type === 'code_written')) {
+    // Find the most recent user message
+    const reversedUserMsgIdx = [...events].reverse().findIndex(e => e.event_type === 'user_message');
+    const lastUserIdx = reversedUserMsgIdx >= 0 ? events.length - 1 - reversedUserMsgIdx : -1;
+    if (lastUserIdx === -1) {
+      return this.bid(0, 'no user message to respond to');
+    }
+
+    // Look at everything that happened AFTER the latest user message
+    const eventsAfterLastUser = events.slice(lastUserIdx + 1);
+    const agentOutputs = eventsAfterLastUser.filter(
+      e => e.event_type === 'agent_output' || e.event_type === 'code_written'
+    );
+
+    // Mode 1: Rich synthesis — specialist agents produced output for this turn
+    if (agentOutputs.length >= 1) {
       return this.bid(0.90, 'Synthesise agent outputs into a final answer');
     }
 
-    // Mode 2: conversational fallback — only the user_message exists.
-    if (events.length === 1 && last?.event_type === 'user_message') {
-      return this.bid(0.40, 'Respond conversationally to vague or greeting input');
+    // Mode 2: Task execution if user confirmed
+    if (pendingTask && last?.event_type === 'user_message') {
+      const confirms = /go ahead|do it|proceed|yes|sure|ok|make it|implement/i;
+      if (confirms.test(last.content)) {
+        return this.bid(0.85, 'User confirmed pending task — execute');
+      }
+    }
+
+    // Mode 3: Conversational fallback — nothing happened after user message
+    if (eventsAfterLastUser.length === 0) {
+      return this.bid(0.40, 'Respond conversationally to user message');
     }
 
     return this.bid(0, 'deferring to specialist agents');
   }
 
   async execute(events: BlackboardEvent[], bid: AgentBid): Promise<AgentOutput> {
-    // Isolate current turn to determine mode correctly
+    // Find the current turn's boundary
     const reversedUserMsgIdx = [...events].reverse().findIndex(e => e.event_type === 'user_message');
-    const lastUserMsgIdx = reversedUserMsgIdx >= 0 ? events.length - 1 - reversedUserMsgIdx : 0;
-    const currentTurnEvents = events.slice(lastUserMsgIdx);
+    const lastUserIdx = reversedUserMsgIdx >= 0 ? events.length - 1 - reversedUserMsgIdx : -1;
+    const currentTurnEvents = lastUserIdx >= 0 ? events.slice(lastUserIdx) : events;
 
     const agentOutputs = currentTurnEvents.filter(e => e.event_type === 'agent_output' || e.event_type === 'code_written');
-    const messages = this.buildMessages(events, SYSTEM_PROMPT);
+    
+    const hasPendingTask = events.some(e => (e.event_type as string) === 'task_proposed');
+    const SYSTEM_PROMPT = buildSynthesisPrompt({
+      hasPendingTask,
+      sessionPhase: events.length < 3 ? 'initial' : 'ongoing',
+    });
 
-    const model = this.getHealthyModel();
+    // ONLY pass current turn events to buildMessages — prevents history bleed/echo
+    const messages = this.buildMessages(currentTurnEvents, SYSTEM_PROMPT);
+
+    // Check if bid contains a preferredModel override
+    let model = (bid as any).preferredModel || resolveModel('agent_orchestrator');
+    if (!this.isProviderHealthy(model)) model = this.getHealthyModel() as string;
+
     if (!model) {
       throw new Error('No healthy synthesis provider available.');
     }
@@ -130,6 +134,9 @@ export class SynthesisAgent extends BaseAgent {
     // Persist a one-sentence summary to USER.md — best-effort, never crashes synthesis.
     const memReg = this.toolRegistry ?? new ToolRegistry();
     if (!memReg.has('write_memory')) memReg.register(writeMemoryDef, writeMemoryFn);
+    if (!memReg.has('write_file')) memReg.register(writeFileDef, writeFileFn);
+    if (!memReg.has('edit_file')) memReg.register(editFileDef, editFileFn);
+    if (!memReg.has('run_command')) memReg.register(runCommandDef, runCommandFn);
     const summary = result.text.slice(0, 200).replace(/\n/g, ' ').trim();
     if (summary) {
       memReg.execute({

@@ -63,16 +63,50 @@ export function ChatInput() {
   };
 
   return (
-    <form className="chat-input-form" onSubmit={handleSubmit}>
+    <form onSubmit={handleSubmit} style={{ display: 'flex', padding: '1rem', backgroundColor: 'var(--ink)', borderTop: 'var(--rule-thick)' }}>
       <textarea
         value={text}
         onChange={(e) => setText(e.target.value)}
-        placeholder="Message AURA..."
+        placeholder="MESSAGE AURA..."
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(e); }
         }}
+        style={{
+          flex: 1,
+          backgroundColor: 'var(--bone)',
+          color: 'var(--ink)',
+          border: 'var(--rule-thick)',
+          padding: '0.75rem',
+          fontFamily: 'var(--font-mono)',
+          fontSize: '0.875rem',
+          resize: 'none',
+          height: '60px',
+          outline: 'none',
+        }}
       />
-      <button type="submit">SEND</button>
+      <button
+        type="submit"
+        style={{
+          backgroundColor: 'var(--oxblood)',
+          color: 'var(--bone)',
+          border: 'var(--rule-thick)',
+          padding: '0 1.5rem',
+          marginLeft: '1rem',
+          cursor: 'pointer',
+          fontFamily: 'var(--font-mono)',
+          fontSize: '0.75rem',
+          fontWeight: 600,
+          letterSpacing: '0.1em',
+          boxShadow: 'var(--shadow-hard)',
+          transition: 'transform 0.1s',
+        }}
+        onMouseEnter={(e) => { e.currentTarget.style.transform = 'translate(-1px, -1px)'; }}
+        onMouseLeave={(e) => { e.currentTarget.style.transform = 'translate(0, 0)'; }}
+        onMouseDown={(e) => { e.currentTarget.style.transform = 'translate(1px, 1px)'; }}
+        onMouseUp={(e) => { e.currentTarget.style.transform = 'translate(-1px, -1px)'; }}
+      >
+        SEND
+      </button>
     </form>
   );
 }

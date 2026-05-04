@@ -1,4 +1,6 @@
-import { quotaTracker } from './QuotaTracker';
+// ModelConfig.ts - Browser-compatible model configuration
+// Note: quotaTracker is exported from a separate file (ModelConfig.server.ts)
+// to avoid pulling better-sqlite3 into browser bundles
 
 export const MODEL_ROLES = {
   daily_driver: {
@@ -86,14 +88,11 @@ export function peekFallbackChain(role: ModelRole): string[] {
 }
 
 /** Resolves a model for execution, respecting daily quotas and recording usage. */
+// resolveModel() is in ModelConfig.server.ts (requires quotaTracker/better-sqlite3)
+// Exporting a placeholder for browser compatibility
 export function resolveModel(role: ModelRole): string {
-  const cfg = MODEL_ROLES[role];
-  if ('dailyQuota' in cfg && !quotaTracker.canUse(role, (cfg as any).dailyQuota)) {
-    console.log(`[Quota] ${role} quota exhausted. Falling back to ${cfg.fallbacks[0]}`);
-    return cfg.fallbacks[0] || cfg.primary;
-  }
-  quotaTracker.record(role);
-  return cfg.primary;
+  console.warn('resolveModel() is only available in Node.js environment');
+  return MODEL_ROLES[role].primary;
 }
 
 /** Returns the ordered fallback chain for execution. */

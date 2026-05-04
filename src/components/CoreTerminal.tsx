@@ -1,8 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
-import { Terminal, Send, ChevronsRight, ChevronsLeft, AlertTriangle, History, Plus } from 'lucide-react';
+import { Terminal, Send, ChevronsRight, ChevronsLeft, AlertTriangle, History, Plus, Cog } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { BlackboardEvent } from '../shared/types';
 import { DebugPanel } from './DebugPanel';
+import { ChatMessage } from './ChatMessage';
+import { useBrainDumpMode, useSetBrainDumpMode, useSelectedModel, useSetSelectedModel } from '../stores/useAura';
+import SettingsPanel from './settings/SettingsPanel';
 
 const getAura = () => (window as any).aura;
 
@@ -71,6 +74,7 @@ interface Message {
   id: string;
   role: 'user' | 'assistant' | 'error';
   content: string;
+  model?: string;
 }
 
 interface DebugData {
@@ -102,23 +106,90 @@ export default function CoreTerminal() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [activeProvider, setActiveProvider] = useState<string>('checking...');
-  const [selectedModel, setSelectedModel] = useState<string>('auto');
   const [wsConnected, setWsConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const [energyMode, setEnergyMode] = useState<'low' | 'high'>('high');
-  const [brainDumpMode, setBrainDumpMode] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  // Use Zustand store for brainDumpMode and model selection
+  const brainDumpMode = useBrainDumpMode();
+  const setBrainDumpMode = useSetBrainDumpMode();
+  const selectedModel = useSelectedModel();
+  const setSelectedModel = useSetSelectedModel();
 
-  // Available models for selection
-  const availableModels = [
-    { id: 'auto', label: 'Auto (Default)' },
-    { id: 'google:gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
-    { id: 'vertex:gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
-    { id: 'cohere:command-r-plus-08-2024', label: 'Command R+' },
-    { id: 'openrouter:meta-llama/llama-3.3-70b-instruct:free', label: 'Llama 3.3 70B' },
-    { id: 'mistral:mistral-small-latest', label: 'Mistral Small' },
-    { id: 'deepseek:deepseek-v3', label: 'DeepSeek V3' },
-    { id: 'groq:llama-3.1-8b-instant', label: 'Llama 3.1 8B (Groq)' },
-  ];
+  // Dynamic models fetched from API (grouped by provider)
+  interface ProviderGroup {
+    id: string;
+    name: string;
+    hasKey: boolean;
+    models: Array<{ id: string; label: string }>;
+  }
+
+  const [modelProviders, setModelProviders] = useState<ProviderGroup[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(true);
+
+  // Fetch available models on mount
+  useEffect(() => {
+    const fetchModels = async () => {
+      try {
+        const aura = getAura();
+        let modelsData;
+
+        if (aura?.getAvailableModels) {
+          modelsData = await aura.getAvailableModels();
+        } else {
+          const res = await fetch('/api/models');
+          modelsData = res.ok ? await res.json() : null;
+        }
+
+        if (modelsData && Array.isArray(modelsData.providers)) {
+          setModelProviders(modelsData.providers);
+        } else {
+          // Fallback to hardcoded list if API fails
+          setModelProviders([
+            {
+              id: 'google',
+              name: 'GOOGLE',
+              hasKey: true,
+              models: [
+                { id: 'google:gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+              ],
+            },
+            {
+              id: 'vertex',
+              name: 'VERTEX',
+              hasKey: true,
+              models: [
+                { id: 'vertex:gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+              ],
+            },
+            {
+              id: 'openrouter',
+              name: 'OPENROUTER',
+              hasKey: false,
+              models: [
+                { id: 'openrouter:meta-llama/llama-3.3-70b-instruct:free', label: 'Llama 3.3 70B' },
+              ],
+            },
+          ]);
+        }
+      } catch (err) {
+        console.error('Failed to fetch models:', err);
+      } finally {
+        setModelsLoading(false);
+      }
+    };
+
+    fetchModels();
+  }, []);
+
+  // Helper to get the display label for the selected model
+  const getSelectedModelLabel = () => {
+    if (selectedModel === 'auto') return 'AUTO (DEFAULT)';
+    const model = modelProviders
+      .flatMap(p => p.models)
+      .find(m => m.id === selectedModel);
+    return model ? model.label.toUpperCase() : selectedModel.toUpperCase();
+  };
 
   const feedRef = useRef<HTMLDivElement>(null);
 
@@ -291,7 +362,6 @@ export default function CoreTerminal() {
       await streamOrchestrate(
         { message: routedMessage, sessionId: activeId, debug: true, preferredModel, energyMode },
 
-
         (eventType, data) => {
           if (eventType === 'progress') {
             setActiveAgent(data.agent);
@@ -303,13 +373,18 @@ export default function CoreTerminal() {
             });
           } else if (eventType === 'done') {
             setActiveId(data.sessionId);
-            setMessages(prev => [...prev, { 
-              id: crypto.randomUUID(), role: 'assistant', content: data.finalResponse 
+            // Include model info in the message for display
+            const modelInfo = data.model || selectedModel || 'auto';
+            setMessages(prev => [...prev, {
+              id: crypto.randomUUID(),
+              role: 'assistant',
+              content: data.finalResponse,
+              model: modelInfo // Store model info with message
             }]);
             setDebugData(prev => {
               // Merge final persisted events with our ephemeral lived stream, de-duping by ID or content matching
               // Since DB events have ID > 0 and trace events might have dummy IDs, we just append non-duplicates
-              const newDbEvents = (data.events || []).filter((e: any) => 
+              const newDbEvents = (data.events || []).filter((e: any) =>
                 !prev.events.some(pe => pe.event_type === e.event_type && pe.content === e.content)
               );
               return {
@@ -357,69 +432,199 @@ export default function CoreTerminal() {
   );
 
   return (
-    <div className={`terminal ${!debugOpen ? 'right-collapsed' : ''} ${!historyOpen ? 'left-collapsed' : ''} flex h-full w-full bg-[#050505] overflow-hidden`}>
+    <div style={{
+      display: 'flex',
+      height: '100%',
+      width: '100%',
+      backgroundColor: 'var(--ink)',
+      overflow: 'hidden',
+    }}>
       
       {/* HISTORY DRAWER */}
       {!historyOpen ? (
         <div 
           onClick={() => { setHistoryOpen(true); loadSessions(); }} 
-          className="w-12 border-r border-[#222] bg-[#0a0a0a] flex flex-col items-center py-6 cursor-pointer hover:bg-[#111] transition-colors"
+          style={{
+            width: '3rem',
+            borderRight: 'var(--rule-thick)',
+            backgroundColor: 'var(--ink)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            paddingTop: '1.5rem',
+            cursor: 'pointer',
+            transition: 'background-color 0.2s',
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.05)'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'var(--ink)'; }}
           title="Expand History"
         >
-          <History size={18} className="text-gray-500 hover:text-gray-300 transition-colors" />
-          <div className="mt-8 text-[11px] text-gray-600 tracking-widest font-mono" style={{ writingMode: 'vertical-rl' }}>
+          <History size={18} style={{ color: 'var(--bone)', opacity: 0.5 }} />
+          <div style={{
+            marginTop: '2rem',
+            fontSize: '0.6875rem',
+            color: 'var(--bone)',
+            opacity: 0.6,
+            fontFamily: 'var(--font-mono)',
+            letterSpacing: '0.1em',
+            writingMode: 'vertical-rl' as const,
+          }}>
             HISTORY
           </div>
         </div>
       ) : (
-        <aside className="w-64 border-r border-[#222] bg-[#0a0a0a] flex flex-col transition-all">
-          <div className="p-4 border-b border-[#222] flex justify-between items-center bg-[#111]">
-            <span className="text-sm font-semibold text-gray-200 tracking-wide">Sessions</span>
-            <div className="flex gap-2">
-              <button onClick={newSession} className="text-gray-400 hover:text-white p-1 rounded hover:bg-white/5 transition-all" title="New Session">
+        <aside style={{
+          width: '16rem',
+          borderRight: 'var(--rule-thick)',
+          backgroundColor: 'var(--ink)',
+          display: 'flex',
+          flexDirection: 'column',
+        }}>
+          <div style={{
+            padding: '1rem',
+            borderBottom: 'var(--rule-thick)',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            backgroundColor: 'rgba(255,255,255,0.05)',
+          }}>
+            <span style={{
+              fontSize: '0.875rem',
+              fontWeight: 600,
+              color: 'var(--bone)',
+              letterSpacing: '0.05em',
+            }}>SESSIONS</span>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <button onClick={newSession} style={{
+                color: 'var(--bone)',
+                opacity: 0.6,
+                padding: '0.25rem',
+                borderRadius: '0.25rem',
+                border: 'none',
+                background: 'transparent',
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+              }} onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.6'; e.currentTarget.style.backgroundColor = 'transparent'; }}
+              title="New Session">
                 <Plus size={18} />
               </button>
-              <button onClick={() => setHistoryOpen(false)} className="text-gray-400 hover:text-white p-1 rounded hover:bg-white/5 transition-all">
+              <button onClick={() => setHistoryOpen(false)} style={{
+                color: 'var(--bone)',
+                opacity: 0.6,
+                padding: '0.25rem',
+                borderRadius: '0.25rem',
+                border: 'none',
+                background: 'transparent',
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+              }} onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.6'; e.currentTarget.style.backgroundColor = 'transparent'; }}>
                 <ChevronsLeft size={18} />
               </button>
             </div>
           </div>
           
-          <div className="flex-1 overflow-y-auto p-3 space-y-1">
+          <div style={{
+            flex: 1,
+            overflowY: 'auto',
+            padding: '0.75rem',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '0.25rem',
+          }}>
             {sessions.length === 0 ? (
-              <div className="text-gray-600 text-xs text-center p-4">No history.</div>
+              <div style={{
+                color: 'var(--bone)',
+                opacity: 0.6,
+                fontSize: '0.75rem',
+                textAlign: 'center',
+                padding: '1rem',
+              }}>NO HISTORY.</div>
             ) : (
               sessions.map(s => {
                 const isResumed = s.state === 'done' || s.state === 'error';
+                const isActive = activeId === s.id;
                 return (
                 <div 
                   key={s.id} 
                   onClick={() => selectSession(s.id)}
-                  className={`p-3 rounded-lg cursor-pointer text-sm transition-all border ${
-                    activeId === s.id 
-                      ? 'bg-blue-600/10 border-blue-500/20 text-blue-100 shadow-sm' 
-                      : 'bg-transparent border-transparent hover:bg-white/5 text-gray-400 hover:text-gray-200'
-                  }`}
+                  style={{
+                    padding: '0.75rem',
+                    borderRadius: '0.5rem',
+                    cursor: 'pointer',
+                    fontSize: '0.875rem',
+                    transition: 'all 0.2s',
+                    border: 'var(--rule-thick)',
+                    backgroundColor: isActive ? 'rgba(59, 76, 202, 0.1)' : 'transparent',
+                    borderColor: isActive ? 'rgba(59, 76, 202, 0.2)' : 'transparent',
+                    color: isActive ? 'var(--bone)' : 'var(--bone)',
+                    opacity: isActive ? 1 : 0.6,
+                  }}
+                  onMouseEnter={(e) => { 
+                    if (!isActive) {
+                      e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.05)'; 
+                      e.currentTarget.style.color = 'var(--bone)';
+                      e.currentTarget.style.opacity = '1';
+                    }
+                  }}
+                  onMouseLeave={(e) => { 
+                    if (!isActive) {
+                      e.currentTarget.style.backgroundColor = 'transparent'; 
+                      e.currentTarget.style.color = 'var(--bone)';
+                      e.currentTarget.style.opacity = '0.6';
+                    }
+                  }}
                 >
-                  <div className="truncate font-medium" title={s.title || s.name || `Session ${s.id.slice(0, 8)}`}>
+                  <div style={{
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    fontWeight: 500,
+                  }} title={s.title || s.name || `Session ${s.id.slice(0, 8)}`}>
                     {s.title || s.name || `Session ${s.id.slice(0, 8)}`}
                   </div>
-                  <div className="text-[11px] text-gray-500 mt-1.5 flex justify-between items-center font-mono">
-                    <span className="opacity-75">{new Date(s.updated_at).toLocaleDateString()}</span>
-                    <div className="flex gap-1 items-center">
+                  <div style={{
+                    fontSize: '0.6875rem',
+                    marginTop: '0.375rem',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    fontFamily: 'var(--font-mono)',
+                    opacity: 0.75,
+                  }}>
+                    <span>{new Date(s.updated_at).toLocaleDateString()}</span>
+                    <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center' }}>
                       {isResumed && (
-                        <span className="px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wider bg-amber-500/20 text-amber-400 font-bold" title="Resumable session">
+                        <span style={{
+                          padding: '0.125rem 0.375rem',
+                          borderRadius: '0.125rem',
+                          fontSize: '0.5625rem',
+                          textTransform: 'uppercase' as const,
+                          letterSpacing: '0.1em',
+                          backgroundColor: 'rgba(245, 197, 66, 0.2)',
+                          color: 'var(--marigold)',
+                          fontWeight: 700,
+                        }} title="Resumable session">
                           ↻
                         </span>
                       )}
                       {s.state && (
-                        <span className={`px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wider ${
-                          s.state === 'running' 
-                            ? 'bg-blue-500/20 text-blue-400 font-bold animate-pulse' 
-                            : s.state === 'error'
-                            ? 'bg-red-500/20 text-red-400 font-bold'
-                            : 'bg-white/5 text-gray-500'
-                        }`}>
+                        <span style={{
+                          padding: '0.125rem 0.375rem',
+                          borderRadius: '0.125rem',
+                          fontSize: '0.5625rem',
+                          textTransform: 'uppercase' as const,
+                          letterSpacing: '0.1em',
+                          backgroundColor: s.state === 'running' ? 'rgba(59, 76, 202, 0.2)' : 
+                                         s.state === 'error' ? 'rgba(220, 38, 38, 0.2)' : 
+                                         'rgba(255,255,255,0.05)',
+                          color: s.state === 'running' ? 'var(--ultramarine)' : 
+                                 s.state === 'error' ? 'var(--oxblood)' : 
+                                 'var(--bone)',
+                          fontWeight: 700,
+                          animation: s.state === 'running' ? 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite' : 'none',
+                        }}>
                           {s.state}
                         </span>
                       )}
@@ -434,76 +639,180 @@ export default function CoreTerminal() {
       )}
 
       {/* MAIN FEED */}
-      <section className="feed flex-1 flex flex-col relative bg-[#0a0a0a]">
-        <div className="feed-stream flex-1 overflow-y-auto px-6 py-6" ref={feedRef} style={{ scrollBehavior: 'smooth' }}>
+      <section style={{
+        flex: 1,
+        display: 'flex',
+        flexDirection: 'column',
+        position: 'relative',
+        backgroundColor: 'var(--ink)',
+      }}>
+        <div style={{
+          flex: 1,
+          overflowY: 'auto',
+          padding: '1.5rem 1.5rem',
+          scrollBehavior: 'smooth',
+        }} ref={feedRef}>
           {messages.length === 0 && status !== 'running' ? (
-            <div className="h-full flex items-center justify-center">
-              <div className="text-center text-gray-500/60">
-                <Terminal size={48} className="mx-auto mb-4 opacity-50" />
-                <h2 className="text-lg font-medium tracking-wide">AURA Shell Ready</h2>
-                <p className="text-sm mt-2 opacity-70">Select a session or enter an objective to begin.</p>
+            <div style={{
+              height: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}>
+              <div style={{
+                textAlign: 'center',
+                color: 'var(--bone)',
+                opacity: 0.6,
+              }}>
+                <Terminal size={48} style={{ margin: '0 auto 1rem', opacity: 0.5 }} />
+                <h2 style={{
+                  fontSize: '1.125rem',
+                  fontWeight: 500,
+                  letterSpacing: '0.05em',
+                  margin: 0,
+                  color: 'var(--bone)',
+                }}>AURA SHELL READY</h2>
+                <p style={{
+                  fontSize: '0.875rem',
+                  marginTop: '0.5rem',
+                  opacity: 0.7,
+                  color: 'var(--bone)',
+                }}>SELECT A SESSION OR ENTER AN OBJECTIVE TO BEGIN.</p>
               </div>
             </div>
           ) : (
-            messages.map(msg => (
-              <div key={msg.id} className={`mb-6 flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-                <div className={`max-w-[85%] px-5 py-4 rounded-2xl ${
-                  msg.role === 'user' 
-                    ? 'bg-blue-600 text-white shadow-md' 
-                    : msg.role === 'error' 
-                      ? 'bg-red-500/10 text-red-400 border border-red-500/20' 
-                      : 'bg-[#18181b] text-gray-200 border border-[#27272a] shadow-sm'
-                }`}>
-                  {msg.role === 'assistant' ? (
-                    <div className="markdown-body prose prose-invert prose-sm max-w-none prose-pre:bg-[#000] prose-pre:border prose-pre:border-[#333]">
-                      <ReactMarkdown>{msg.content}</ReactMarkdown>
-                    </div>
-                  ) : msg.role === 'error' ? (
-                    <div className="flex items-center gap-2 text-sm font-medium">
-                      <AlertTriangle size={16} /> {msg.content}
-                    </div>
-                  ) : (
-                    <div className="whitespace-pre-wrap text-[15px] leading-relaxed">{msg.content}</div>
-                  )}
-                </div>
-              </div>
-            ))
+            messages.map(msg => {
+              // Convert Message to BlackboardEvent for ChatMessage component
+              const event: BlackboardEvent = {
+                id: typeof msg.id === 'string' ? parseInt(msg.id) || Date.now() : msg.id,
+                session_id: activeId || 'temp',
+                seq: 0,
+                event_type: msg.role === 'user' ? 'user_message' :
+                            msg.role === 'error' ? 'escalation_required' :
+                            'synthesis_complete',
+                author: msg.role === 'user' ? 'user' :
+                         msg.role === 'error' ? 'orchestrator' :
+                         'synthesis_agent',
+                content: msg.content,
+                created_at: new Date().toISOString(),
+                metadata: msg.model ? JSON.stringify({ model: msg.model }) : null,
+              };
+              return (
+                <ChatMessage
+                  key={msg.id}
+                  event={event}
+                  isStreaming={status === 'running'}
+                />
+              );
+            })
           )}
         </div>
 
         {/* INPUT COMPOSER */}
-        <div className="composer p-4 bg-[#111] border-t border-[#222]">
-          <div className="flex gap-3 items-center max-w-4xl mx-auto w-full relative">
+        <div style={{
+          padding: '1rem',
+          backgroundColor: 'var(--ink)',
+          borderTop: 'var(--rule-thick)',
+        }}>
+          <div style={{
+            display: 'flex',
+            gap: '0.75rem',
+            alignItems: 'center',
+            maxWidth: '56rem',
+            margin: '0 auto',
+            width: '100%',
+            position: 'relative',
+          }}>
             <select 
               value={mode} 
               onChange={e => setMode(e.target.value)}
-              className="bg-[#1a1a1a] text-gray-300 border border-[#333] rounded-lg px-3 py-3 text-sm outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/30 transition-all disabled:opacity-50"
+              style={{
+                backgroundColor: 'var(--bone)',
+                color: 'var(--ink)',
+                border: 'var(--rule-thick)',
+                borderRadius: '0.5rem',
+                padding: '0.75rem',
+                fontSize: '0.875rem',
+                fontFamily: 'var(--font-mono)',
+                fontWeight: 600,
+                outline: 'none',
+                cursor: status === 'running' ? 'not-allowed' : 'pointer',
+                opacity: status === 'running' ? 0.5 : 1,
+              }}
               disabled={status === 'running'}
             >
-              <option value="auto">Auto</option>
-              <option value="research">Research</option>
-              <option value="code">Code</option>
+              <option value="auto">AUTO</option>
+              <option value="research">RESEARCH</option>
+              <option value="code">CODE</option>
             </select>
 
-            <select 
-              value={selectedModel} 
+            {/* Model Selector with Provider Grouping */}
+            <select
+              value={selectedModel}
               onChange={e => setSelectedModel(e.target.value)}
-              className="bg-[#1a1a1a] text-gray-300 border border-[#333] rounded-lg px-3 py-3 text-sm outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/30 transition-all disabled:opacity-50"
+              style={{
+                backgroundColor: 'var(--bone)',
+                color: 'var(--ink)',
+                border: 'var(--rule-thick)',
+                borderRadius: '0.5rem',
+                padding: '0.75rem',
+                fontSize: '0.875rem',
+                fontFamily: 'var(--font-mono)',
+                fontWeight: 600,
+                outline: 'none',
+                cursor: status === 'running' ? 'not-allowed' : 'pointer',
+                opacity: status === 'running' ? 0.5 : 1,
+                minWidth: '200px',
+              }}
               disabled={status === 'running'}
               title="Select AI model"
             >
-              {availableModels.map(m => (
-                <option key={m.id} value={m.id}>{m.label}</option>
+              <option value="auto">AUTO (DEFAULT)</option>
+              {modelProviders.map(provider => (
+                <optgroup key={provider.id} label={`${provider.name}${!provider.hasKey ? ' 🔒' : ''}`}>
+                  {provider.models.map(model => (
+                    <option key={model.id} value={model.id}>
+                      {model.label.toUpperCase()}
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
 
             <button
+              onClick={() => setSettingsOpen(true)}
+              style={{
+                padding: '0.75rem',
+                borderRadius: '0.5rem',
+                border: 'var(--rule-thick)',
+                background: 'var(--bone)',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+              title="Model Settings"
+              disabled={status === 'running'}
+            >
+              <Cog size={16} />
+            </button>
+
+            <button
               onClick={() => setEnergyMode(prev => prev === 'high' ? 'low' : 'high')}
-              className={`px-3 py-3 rounded-lg text-sm border transition-all ${
-                energyMode === 'high' 
-                  ? 'bg-blue-600/20 border-blue-500/30 text-blue-300' 
-                  : 'bg-orange-600/20 border-orange-500/30 text-orange-300'
-              } disabled:opacity-50`}
+              style={{
+                padding: '0.75rem',
+                borderRadius: '0.5rem',
+                fontSize: '0.875rem',
+                border: 'var(--rule-thick)',
+                cursor: status === 'running' ? 'not-allowed' : 'pointer',
+                opacity: status === 'running' ? 0.5 : 1,
+                transition: 'all 0.2s',
+                backgroundColor: energyMode === 'high' ? 'var(--ultramarine)' : 'var(--marigold)',
+                color: energyMode === 'high' ? 'var(--bone)' : 'var(--ink)',
+                fontFamily: 'var(--font-mono)',
+                fontWeight: 600,
+                letterSpacing: '0.05em',
+              }}
               disabled={status === 'running'}
               title={energyMode === 'high' ? 'High Energy: Detailed responses' : 'Low Energy: Concise responses'}
             >
@@ -511,22 +820,46 @@ export default function CoreTerminal() {
             </button>
 
             <button
-              onClick={() => setBrainDumpMode(prev => !prev)}
-              className={`px-3 py-3 rounded-lg text-sm border transition-all ${
-                brainDumpMode 
-                  ? 'bg-purple-600/20 border-purple-500/30 text-purple-300' 
-                  : 'bg-[#1a1a1a] text-gray-300 border-[#333]'
-              } disabled:opacity-50`}
+              onClick={() => setBrainDumpMode(!brainDumpMode)}
+              style={{
+                padding: '0.75rem',
+                borderRadius: '0.5rem',
+                fontSize: '0.875rem',
+                border: 'var(--rule-thick)',
+                cursor: status === 'running' ? 'not-allowed' : 'pointer',
+                opacity: status === 'running' ? 0.5 : 1,
+                transition: 'all 0.2s',
+                backgroundColor: brainDumpMode ? 'var(--chartreuse)' : 'var(--bone)',
+                color: brainDumpMode ? 'var(--ink)' : 'var(--ink)',
+                fontFamily: 'var(--font-mono)',
+                fontWeight: 600,
+                letterSpacing: '0.05em',
+              }}
               disabled={status === 'running'}
               title={brainDumpMode ? 'Brain Dump Mode: ON - Will decompose vague goals into checklist' : 'Brain Dump Mode: OFF'}
             >
               {brainDumpMode ? '🧠 DUMP ON' : '🧠 DUMP'}
             </button>
             
-            <div className="flex-1 relative group">
+            <div style={{ flex: 1, position: 'relative' }}>
               <input
-                className="w-full bg-[#1a1a1a] text-gray-200 border border-[#333] rounded-lg pl-4 pr-12 py-3 text-[15px] outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/30 transition-all disabled:opacity-50 placeholder-gray-600 shadow-inner"
-                placeholder="Enter objective..."
+                style={{
+                  width: '100%',
+                  backgroundColor: 'var(--bone)',
+                  color: 'var(--ink)',
+                  border: 'var(--rule-thick)',
+                  borderRadius: '0.5rem',
+                  paddingLeft: '1rem',
+                  paddingRight: '3rem',
+                  paddingTop: '0.75rem',
+                  paddingBottom: '0.75rem',
+                  fontSize: '0.9375rem',
+                  fontFamily: 'var(--font-mono)',
+                  outline: 'none',
+                  cursor: status === 'running' ? 'not-allowed' : 'text',
+                  opacity: status === 'running' ? 0.5 : 1,
+                }}
+                placeholder="ENTER OBJECTIVE..."
                 value={input}
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && !e.shiftKey && status !== 'running' && route()}
@@ -538,33 +871,68 @@ export default function CoreTerminal() {
             <button 
               onClick={route} 
               disabled={!input.trim() || status === 'running'}
-              className="bg-blue-600 hover:bg-blue-500 text-white rounded-lg p-3 shadow-md border-none cursor-pointer transition-all disabled:opacity-50 flex items-center justify-center disabled:cursor-not-allowed hover:-translate-y-px active:translate-y-0"
+              style={{
+                backgroundColor: 'var(--oxblood)',
+                color: 'var(--bone)',
+                borderRadius: '0.5rem',
+                padding: '0.75rem',
+                border: 'var(--rule-thick)',
+                cursor: !input.trim() || status === 'running' ? 'not-allowed' : 'pointer',
+                opacity: !input.trim() || status === 'running' ? 0.5 : 1,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: 'var(--shadow-hard)',
+                transition: 'transform 0.1s',
+              }}
+              onMouseEnter={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.transform = 'translate(-1px, -1px)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.transform = 'translate(0, 0)'; }}
+              onMouseDown={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.transform = 'translate(1px, 1px)'; }}
+              onMouseUp={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.transform = 'translate(-1px, -1px)'; }}
             >
-              {status === 'running' ? <div className="animate-spin w-4 h-4 border-2 border-white/30 border-t-white rounded-full" /> : <Send size={18} className="ml-0.5" />}
+              {status === 'running' ? <div style={{ width: '1rem', height: '1rem', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white', borderRadius: '50%', animation: 'spin 1s linear infinite' }} /> : <Send size={18} />}
             </button>
           </div>
           
           {/* STATUS LINE */}
-          <div className="mt-3 flex items-center justify-between max-w-4xl mx-auto w-full text-xs text-gray-500 uppercase tracking-wider font-mono">
-            <div className="flex items-center gap-2">
-              {status === 'idle' && <><span className="w-2 h-2 rounded-full bg-gray-600" /> IDLE</>}
+          <div style={{
+            marginTop: '0.75rem',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            maxWidth: '56rem',
+            margin: '0.75rem auto 0',
+            width: '100%',
+            fontSize: '0.6875rem',
+            color: 'var(--bone)',
+            opacity: 0.6,
+            textTransform: 'uppercase' as const,
+            letterSpacing: '0.1em',
+            fontFamily: 'var(--font-mono)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              {status === 'idle' && <><span style={{ width: '0.5rem', height: '0.5rem', borderRadius: '50%', backgroundColor: 'var(--bone)', opacity: 0.6 }} /> IDLE</>}
               {status === 'running' && (
-                <><span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" /> {activeAgent ? `RUNNING: ${activeAgent}` : 'RUNNING...'}</>
+                <>
+                  <span style={{ width: '0.5rem', height: '0.5rem', borderRadius: '50%', backgroundColor: 'var(--ultramarine)', animation: 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite' }} />
+                  <span style={{ color: 'var(--ultramarine)' }}>ROUTING</span>
+                  {activeAgent && <span style={{ color: 'var(--bone)', opacity: 0.6 }}>→ {activeAgent.toUpperCase()}</span>}
+                </>
               )}
-              {status === 'complete' && <><span className="w-2 h-2 rounded-full bg-green-500" /> COMPLETE</>}
-              {status === 'error' && <><span className="w-2 h-2 rounded-full bg-red-500" /> ERROR</>}
+              {status === 'complete' && <><span style={{ width: '0.5rem', height: '0.5rem', borderRadius: '50%', backgroundColor: 'var(--chartreuse)' }} /> READY</>}
+              {status === 'error' && <><span style={{ width: '0.5rem', height: '0.5rem', borderRadius: '50%', backgroundColor: 'var(--oxblood)' }} /> ERROR</>}
               {status === 'running' && (
-                <span className={`ml-2 ${wsConnected ? 'text-green-400' : 'text-gray-600'}`}>
+                <span style={{ color: wsConnected ? 'var(--chartreuse)' : 'var(--bone)', opacity: 0.6 }}>
                   ● {wsConnected ? 'TRACE' : 'NO TRACE'}
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-3">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
               {status === 'complete' && debugData.latency > 0 && (
-                <span className="opacity-70">— {debugData.latency}ms</span>
+                <span style={{ opacity: 0.7 }}>— {debugData.latency}ms</span>
               )}
-              <span className="opacity-50">|</span>
-              <span className="text-green-400/80">{activeProvider.toUpperCase()}</span>
+              <span style={{ opacity: 0.5 }}>|</span>
+              <span style={{ color: 'var(--chartreuse)' }}>{activeProvider.toUpperCase()}</span>
             </div>
           </div>
         </div>
@@ -574,47 +942,128 @@ export default function CoreTerminal() {
       {!debugOpen ? (
         <div 
           onClick={() => setDebugOpen(true)} 
-          className="w-12 border-l border-[#222] bg-[#0a0a0a] flex flex-col items-center py-6 cursor-pointer hover:bg-[#111] transition-colors"
+          style={{
+            width: '3rem',
+            borderLeft: 'var(--rule-thick)',
+            backgroundColor: 'var(--ink)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            paddingTop: '1.5rem',
+            cursor: 'pointer',
+            transition: 'background-color 0.2s',
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.05)'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'var(--ink)'; }}
           title="Expand Debug Trace"
         >
-          <ChevronsLeft size={18} className="text-gray-500 hover:text-gray-300 transition-colors" />
-          <div className="mt-8 text-[11px] text-gray-600 tracking-widest font-mono" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>
+          <ChevronsLeft size={18} style={{ color: 'var(--bone)', opacity: 0.5 }} />
+          <div style={{
+            marginTop: '2rem',
+            fontSize: '0.6875rem',
+            color: 'var(--bone)',
+            opacity: 0.6,
+            fontFamily: 'var(--font-mono)',
+            letterSpacing: '0.1em',
+            writingMode: 'vertical-rl' as const,
+            transform: 'rotate(180deg)',
+          }}>
             DEBUG TRACE
           </div>
         </div>
       ) : (
-        <aside className="w-80 border-l border-[#222] bg-[#0a0a0a] flex flex-col transition-all">
-          <div className="p-4 border-b border-[#222] flex justify-between items-center bg-[#111]">
-            <span className="text-sm font-semibold text-gray-200 tracking-wide font-mono">Trace & Telemetry</span>
-            <button onClick={() => setDebugOpen(false)} className="text-gray-400 hover:text-white p-1 rounded hover:bg-white/5 transition-colors">
+        <aside style={{
+          width: '20rem',
+          borderLeft: 'var(--rule-thick)',
+          backgroundColor: 'var(--ink)',
+          display: 'flex',
+          flexDirection: 'column',
+        }}>
+          <div style={{
+            padding: '1rem',
+            borderBottom: 'var(--rule-thick)',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            backgroundColor: 'rgba(255,255,255,0.05)',
+          }}>
+            <span style={{
+              fontSize: '0.875rem',
+              fontWeight: 600,
+              color: 'var(--bone)',
+              letterSpacing: '0.05em',
+              fontFamily: 'var(--font-mono)',
+            }}>TRACE & TELEMETRY</span>
+            <button onClick={() => setDebugOpen(false)} style={{
+              color: 'var(--bone)',
+              opacity: 0.6,
+              padding: '0.25rem',
+              borderRadius: '0.25rem',
+              border: 'none',
+              background: 'transparent',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+            }} onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.6'; e.currentTarget.style.backgroundColor = 'transparent'; }}>
               <ChevronsRight size={18} />
             </button>
           </div>
           
-          <div className="p-4 border-b border-[#222] flex gap-4 text-xs font-mono text-gray-400 bg-black/40">
-            <div className="flex flex-col gap-1">
-              <span className="uppercase text-[9px] tracking-widest text-gray-600">Loops</span>
-              <span className="text-gray-200">{debugData.loops}</span>
+          <div style={{
+            padding: '1rem',
+            borderBottom: 'var(--rule-thick)',
+            display: 'flex',
+            gap: '1rem',
+            fontSize: '0.75rem',
+            fontFamily: 'var(--font-mono)',
+            color: 'var(--bone)',
+            opacity: 0.6,
+            backgroundColor: 'rgba(0,0,0,0.4)',
+          }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+              <span style={{ textTransform: 'uppercase' as const, fontSize: '0.5625rem', letterSpacing: '0.1em', opacity: 0.6 }}>LOOPS</span>
+              <span style={{ color: 'var(--bone)', opacity: 1 }}>{debugData.loops}</span>
             </div>
-            <div className="flex flex-col gap-1">
-              <span className="uppercase text-[9px] tracking-widest text-gray-600">Latency</span>
-              <span className="text-gray-200">{debugData.latency}ms</span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+              <span style={{ textTransform: 'uppercase' as const, fontSize: '0.5625rem', letterSpacing: '0.1em', opacity: 0.6 }}>LATENCY</span>
+              <span style={{ color: 'var(--bone)', opacity: 1 }}>{debugData.latency}ms</span>
             </div>
-            <div className="flex flex-col gap-1">
-              <span className="uppercase text-[9px] tracking-widest text-gray-600">Term</span>
-              <span className="text-gray-200 truncate max-w-[80px]" title={debugData.termination}>{debugData.termination}</span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+              <span style={{ textTransform: 'uppercase' as const, fontSize: '0.5625rem', letterSpacing: '0.1em', opacity: 0.6 }}>TERM</span>
+              <span style={{ color: 'var(--bone)', opacity: 1, overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '5rem' }} title={debugData.termination}>{debugData.termination}</span>
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-[#0a0a0a]">
+          <div style={{
+            flex: 1,
+            overflowY: 'auto',
+            padding: '1rem',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '0.75rem',
+            backgroundColor: 'var(--ink)',
+          }}>
             {debugData.events.length === 0 ? (
-              <div className="text-gray-600 text-xs text-center py-8">No trace data available.</div>
+              <div style={{
+                color: 'var(--bone)',
+                opacity: 0.6,
+                fontSize: '0.75rem',
+                textAlign: 'center',
+                padding: '2rem 0',
+              }}>NO TRACE DATA AVAILABLE.</div>
             ) : (
               [...debugData.events].reverse().map((ev, i) => renderDebugEvent(ev, i))
             )}
           </div>
         </aside>
       )}
+
+      {/* Settings Panel */}
+      <SettingsPanel
+        isOpen={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        modelProviders={modelProviders}
+      />
     </div>
   );
 }

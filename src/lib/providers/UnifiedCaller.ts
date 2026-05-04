@@ -1,3 +1,5 @@
+import path from 'path';
+
 /**
  * UnifiedCaller — single HTTP call function for all supported provider APIs.
  *
@@ -140,11 +142,27 @@ async function callVertex(
 ): Promise<CallerResult> {
   // opts.apiKey carries GOOGLE_CLOUD_PROJECT; location comes from env.
   const project  = opts.apiKey;
-  const location = process.env.GOOGLE_CLOUD_LOCATION ?? 'us-central1';
+  const location = process.env.GOOGLE_CLOUD_LOCATION ?? 'europe-west3';
 
   // Dynamic import keeps the SDK out of the bundle for providers that don't use it.
   const { GoogleGenAI } = await import('@google/genai');
-  const ai = new GoogleGenAI({ vertexai: true, project, location } as any);
+  
+  // Resolve credentials path if provided
+  const credPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  const resolvedCredPath = credPath && !path.isAbsolute(credPath) 
+    ? path.resolve(process.cwd(), credPath) 
+    : credPath;
+  
+  const ai = resolvedCredPath
+    ? new GoogleGenAI({ 
+        vertexai: true, 
+        project, 
+        location,
+        googleAuthOptions: {
+          keyFile: resolvedCredPath
+        }
+      } as any)
+    : new GoogleGenAI({ vertexai: true, project, location } as any);
 
   // Split system instructions from the conversation.
   const systemMsg = messages.find(m => m.role === 'system')?.content ?? undefined;

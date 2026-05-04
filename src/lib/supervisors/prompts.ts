@@ -1,11 +1,13 @@
 import { SupervisorDomain } from '../../shared/types';
 import { getAuraMemory } from '../memory/loader';
+import { peekModel, type ModelRole } from '../ModelConfig';
 
 export interface DomainConfig {
   name: string;
   supervisorRouting: string;   // "provider:model" for the planner call
   workerRoutings: string[];    // available workers listed in the prompt
   systemHint: string;          // domain-specific behaviour hint injected into the prompt
+  fallbackRole: ModelRole;
 }
 
 /**
@@ -30,8 +32,11 @@ export function assembleSystemPrompt(base: string): string {
     // Memory not yet initialized (test harness / cold start) — degrade gracefully.
   }
 
-  if (!memoryContext) return base;
-  return `${memoryContext}\n\n---\n\n${base}`;
+  const timeContext = `Current time: ${new Date().toString()}`;
+
+  if (!memoryContext) return `${timeContext}\n\n${base}`;
+  const memoryInstruction = `[SYSTEM MEMORY INJECTED]\nYou are equipped with persistent memory. The context below contains the user's profile, active goals, and past session summaries.\nNEVER claim you do not have memory, personal goals, or access to past conversations. Always use this context to answer accurately.`;
+  return `${memoryInstruction}\n\n${memoryContext}\n\n---\n\n${timeContext}\n\n${base}`;
 }
 
 /**
@@ -44,33 +49,43 @@ export function assembleSystemPrompt(base: string): string {
 export const DOMAIN_CONFIG: Record<SupervisorDomain, DomainConfig> = {
   research: {
     name: 'Research Supervisor',
-    supervisorRouting: 'groq:llama-3.3-70b-versatile',
+    supervisorRouting: peekModel('agent_orchestrator'),
     workerRoutings: [
       'codex:o4-mini',                 // code-assisted retrieval & analysis (requires codex CLI + OPENAI_API_KEY)
       'groq:llama-3.3-70b-versatile',  // synthesis & reasoning fallback
+      peekModel('daily_driver'),
+      peekModel('long_context'),
+      peekModel('reasoning'),
     ],
+    fallbackRole: 'daily_driver',
     systemHint:
       'Focus on retrieving verifiable facts, market signals, and synthesising them into actionable intelligence. ' +
       'Prefer the codex worker for structured analysis and groq for synthesis.',
   },
   code: {
     name: 'Code Supervisor',
-    supervisorRouting: 'groq:llama-3.3-70b-versatile',
+    supervisorRouting: peekModel('agent_orchestrator'),
     workerRoutings: [
       'groq:qwen-2.5-coder-32b',      // code generation & debugging
       'groq:llama-3.3-70b-versatile', // explanation & review
+      peekModel('daily_driver'),
+      peekModel('reasoning'),
     ],
+    fallbackRole: 'daily_driver',
     systemHint:
       'Focus on producing correct, runnable code. ' +
       'Prefer the groq:qwen-2.5-coder-32b worker for generation and groq:llama-3.3-70b-versatile for review/explanation.',
   },
   planning: {
     name: 'Planning Supervisor',
-    supervisorRouting: 'groq:llama-3.3-70b-versatile',
+    supervisorRouting: peekModel('agent_orchestrator'),
     workerRoutings: [
       'groq:llama-3.3-70b-versatile', // strategic decomposition
       'groq:llama-3.1-8b-instant',    // fast auxiliary steps
+      peekModel('reasoning'),
+      peekModel('bulk_fast'),
     ],
+    fallbackRole: 'bulk_fast',
     systemHint:
       'Focus on breaking objectives into concrete, prioritised steps. ' +
       'Prefer groq:llama-3.3-70b-versatile for strategic reasoning and groq:llama-3.1-8b-instant for fast auxiliary steps.',

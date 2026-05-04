@@ -4,6 +4,7 @@ import type { CallerMessage } from '../providers/UnifiedCaller';
 import { assembleSystemPrompt } from '../supervisors/prompts';
 import type { ToolDefinition, ReActResult } from '../tools/types';
 import type { ToolRegistry } from '../tools/registry';
+import { broadcastEvent } from '../debug';
 
 export type { AgentBid, AgentOutput };
 
@@ -53,8 +54,14 @@ export abstract class BaseAgent implements ReactiveAgent {
 
   /** Collect content strings from agent_output events by a specific author. */
   protected outputsBy(events: BlackboardEvent[], author: string): string[] {
-    return events
-      .filter(e => e.event_type === 'agent_output' && e.author === author)
+    // Isolate to the current turn to prevent agents from thinking they've already run
+    // for a new follow-up request.
+    const reversedUserMsgIdx = [...events].reverse().findIndex(e => e.event_type === 'user_message');
+    const lastUserIdx = reversedUserMsgIdx >= 0 ? events.length - 1 - reversedUserMsgIdx : 0;
+    const currentTurn = events.slice(lastUserIdx);
+
+    return currentTurn
+      .filter(e => (e.event_type === 'agent_output' || e.event_type === 'code_written') && e.author === author)
       .map(e => e.content);
   }
 
@@ -152,6 +159,7 @@ export abstract class BaseAgent implements ReactiveAgent {
    * conversation structure; other providers handle them as text.
    */
   protected async runReactLoop(
+    sessionId: string,
     messages: CallerMessage[],
     model: string,
     toolDefs: ToolDefinition[],
@@ -165,6 +173,8 @@ export abstract class BaseAgent implements ReactiveAgent {
     let lastModel      = model;
 
     for (let step = 0; step < MAX_REACT_STEPS; step++) {
+      broadcastEvent(sessionId, { event_type: 'react_think', author: this.name, content: `Reasoning step ${step + 1}/${MAX_REACT_STEPS} with ${model}...` });
+
       let result = await this.registry.call(model, '', {
         temperature: opts.temperature,
         messages:    localMessages,
@@ -176,7 +186,7 @@ export abstract class BaseAgent implements ReactiveAgent {
         // Try all other available providers in load-sorted order.
         const fallback = await this.registry.callWithFallback('', {
           temperature: opts.temperature,
-          messages:    localMessages as any,
+          messages:    localMessages,
           tools:       toolDefs.length ? toolDefs : undefined,
         });
         if (!fallback.rateLimited && fallback.text) {
@@ -195,6 +205,7 @@ export abstract class BaseAgent implements ReactiveAgent {
       lastModel       = result.model;
 
       if (!result.toolCalls?.length) {
+        broadcastEvent(sessionId, { event_type: 'react_observe', author: this.name, content: `Final answer generated.` });
         return {
           content:    result.text,
           model:      lastModel,
@@ -203,6 +214,8 @@ export abstract class BaseAgent implements ReactiveAgent {
           tokensOut:  totalTokensOut,
         };
       }
+
+      broadcastEvent(sessionId, { event_type: 'react_act', author: this.name, content: `Calling ${result.toolCalls.length} tool(s)` });
 
       // Append the assistant's tool-call intent (preserves OpenAI protocol).
       localMessages.push({
@@ -222,11 +235,15 @@ export abstract class BaseAgent implements ReactiveAgent {
           toolArgs = {};
         }
 
+        broadcastEvent(sessionId, { event_type: 'react_act', author: this.name, content: `Executing tool: ${tc.function?.name}` });
+
         const toolResult = await toolRegistry.execute({
           id:        tc.id ?? `tool_${step}_${tc.function?.name}`,
           name:      tc.function?.name,
           arguments: toolArgs,
         });
+
+        broadcastEvent(sessionId, { event_type: 'react_observe', author: this.name, content: `Tool ${tc.function?.name} completed.` });
 
         localMessages.push({
           role:       'tool',

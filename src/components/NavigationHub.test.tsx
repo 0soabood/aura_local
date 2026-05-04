@@ -9,10 +9,7 @@ vi.mock('better-sqlite3');
 import NavigationHub from './NavigationHub';
 
 describe('NavigationHub Crash Resilience', () => {
-  const mockOnNavigate = vi.fn();
-
   beforeEach(() => {
-    mockOnNavigate.mockClear();
     // Mock window.aura with various edge cases
     (window as any).aura = {
       getStatsV2: vi.fn().mockResolvedValue({
@@ -31,7 +28,7 @@ describe('NavigationHub Crash Resilience', () => {
   });
 
   it('renders without crashing when all data is empty', async () => {
-    render(<NavigationHub onNavigate={mockOnNavigate} />);
+    render(<NavigationHub />);
     
     await waitFor(() => {
       // Check for HUB tag which is unique to NavigationHub
@@ -46,7 +43,7 @@ describe('NavigationHub Crash Resilience', () => {
       { id: '3', name: 'Test', state: 'running' }, // Missing token_count
     ]);
 
-    render(<NavigationHub onNavigate={mockOnNavigate} />);
+    render(<NavigationHub />);
     
     await waitFor(() => {
       expect(screen.getByText('HUB')).toBeTruthy();
@@ -56,7 +53,7 @@ describe('NavigationHub Crash Resilience', () => {
   it('renders without crashing when stats is null', async () => {
     (window as any).aura.getStatsV2 = vi.fn().mockResolvedValue(null);
 
-    render(<NavigationHub onNavigate={mockOnNavigate} />);
+    render(<NavigationHub />);
     
     await waitFor(() => {
       expect(screen.getByText('HUB')).toBeTruthy();
@@ -70,7 +67,7 @@ describe('NavigationHub Crash Resilience', () => {
     (window as any).aura.getSnippets = vi.fn().mockRejectedValue(new Error('API Error'));
     (window as any).aura.listLogs = vi.fn().mockRejectedValue(new Error('API Error'));
 
-    render(<NavigationHub onNavigate={mockOnNavigate} />);
+    render(<NavigationHub />);
     
     await waitFor(() => {
       expect(screen.getByText('HUB')).toBeTruthy();
@@ -85,7 +82,7 @@ describe('NavigationHub Crash Resilience', () => {
       { id: '2', name: 'Test', state: 'invalid-state', token_count: null },
     ]);
 
-    render(<NavigationHub onNavigate={mockOnNavigate} />);
+    render(<NavigationHub />);
     
     await waitFor(() => {
       expect(screen.getByText('HUB')).toBeTruthy();
@@ -98,7 +95,7 @@ describe('NavigationHub Crash Resilience', () => {
       { id: '1', name: longName, state: 'done', token_count: 1000 },
     ]);
 
-    render(<NavigationHub onNavigate={mockOnNavigate} />);
+    render(<NavigationHub />);
     
     await waitFor(() => {
       expect(screen.getByText('HUB')).toBeTruthy();
@@ -110,7 +107,7 @@ describe('NavigationHub Crash Resilience', () => {
     (window as any).aura.getSnippets = vi.fn().mockResolvedValue([]);
     (window as any).aura.listLogs = vi.fn().mockResolvedValue([]);
 
-    render(<NavigationHub onNavigate={mockOnNavigate} />);
+    render(<NavigationHub />);
     
     await waitFor(() => {
       expect(screen.getByText('0 CARDS')).toBeTruthy();
@@ -118,20 +115,20 @@ describe('NavigationHub Crash Resilience', () => {
     });
   });
 
-  it('calls onNavigate when department tile is clicked', async () => {
-    render(<NavigationHub onNavigate={mockOnNavigate} />);
+  it('navigates when department tile is clicked', async () => {
+    render(<NavigationHub />);
     
     await waitFor(() => {
       const terminalTile = screen.getByText('TERMINAL');
       fireEvent.click(terminalTile);
-      expect(mockOnNavigate).toHaveBeenCalledWith('terminal');
+      // Navigation is now handled internally via useNavigate
     });
   });
 
   it('renders recent strip with no sessions', async () => {
     (window as any).aura.listSessionsV2 = vi.fn().mockResolvedValue([]);
 
-    render(<NavigationHub onNavigate={mockOnNavigate} />);
+    render(<NavigationHub />);
     
     await waitFor(() => {
       expect(screen.getByText('NO SESSIONS YET')).toBeTruthy();
@@ -145,7 +142,7 @@ describe('NavigationHub Crash Resilience', () => {
       { id: '3', name: 'Running Session', state: 'running', token_count: 200 },
     ]);
 
-    render(<NavigationHub onNavigate={mockOnNavigate} />);
+    render(<NavigationHub />);
     
     await waitFor(() => {
       // Check for resumable badges (↻)
@@ -165,7 +162,7 @@ describe('NavigationHub Crash Resilience', () => {
       { id: '5', name: 'Error 1', state: 'error', token_count: 50 },
     ]);
 
-    render(<NavigationHub onNavigate={mockOnNavigate} />);
+    render(<NavigationHub />);
     
     await waitFor(() => {
       // Should show "2 LIVE · 2 DONE" (2 running, 2 done - error is not counted in doneCount)
@@ -187,7 +184,7 @@ describe('NavigationHub Crash Resilience', () => {
     ];
     (window as any).aura.listRoadmapItems = vi.fn().mockResolvedValue(roadmapItems);
 
-    render(<NavigationHub onNavigate={mockOnNavigate} />);
+    render(<NavigationHub />);
     
     await waitFor(() => {
       expect(screen.getByText('5 CARDS')).toBeTruthy();
@@ -204,7 +201,7 @@ describe('NavigationHub Crash Resilience', () => {
     ];
     (window as any).aura.getSnippets = vi.fn().mockResolvedValue(snippets);
 
-    render(<NavigationHub onNavigate={mockOnNavigate} />);
+    render(<NavigationHub />);
     
     await waitFor(() => {
       expect(screen.getByText('3 ENTRIES')).toBeTruthy();
@@ -217,7 +214,7 @@ describe('NavigationHub Crash Resilience', () => {
     const logs = Array(42).fill(null).map((_, i) => ({ id: i, message: `Log ${i}` }));
     (window as any).aura.listLogs = vi.fn().mockResolvedValue(logs);
 
-    render(<NavigationHub onNavigate={mockOnNavigate} />);
+    render(<NavigationHub />);
     
     await waitFor(() => {
       expect(screen.getByText('42')).toBeTruthy();
@@ -236,7 +233,7 @@ describe('NavigationHub Crash Resilience', () => {
       spend_series_usd: Array(24).fill(1.77),
     });
 
-    render(<NavigationHub onNavigate={mockOnNavigate} />);
+    render(<NavigationHub />);
     
     await waitFor(() => {
       expect(screen.getByText('$42.50')).toBeTruthy();
@@ -252,7 +249,7 @@ describe('NavigationHub Crash Resilience', () => {
       { id: '3', name: 'Active 1', state: 'running', token_count: 150 },
     ]);
 
-    render(<NavigationHub onNavigate={mockOnNavigate} />);
+    render(<NavigationHub />);
     
     await waitFor(() => {
       expect(screen.getByText('2')).toBeTruthy(); // 2 archived sessions
@@ -270,7 +267,7 @@ describe('NavigationHub Crash Resilience', () => {
     (window as any).aura.getSnippets = vi.fn().mockResolvedValue([{ id: '1' }, { id: '2' }]);
     (window as any).aura.listLogs = vi.fn().mockResolvedValue(Array(5).fill({ id: 1 }));
 
-    render(<NavigationHub onNavigate={mockOnNavigate} />);
+    render(<NavigationHub />);
     
     await waitFor(() => {
       expect(screen.getByText(/1 LIVE/)).toBeTruthy();

@@ -142,6 +142,56 @@ export const aura: AuraAPI = {
     return res.json();
   },
 
+  // Provider & Model info
+  getActiveProvider: async () => {
+    const res = await fetch('/api/settings');
+    if (!res.ok) return 'groq';
+    const data = await res.json();
+    return data.activeProvider || 'groq';
+  },
+
+  getAvailableModels: async () => {
+    const res = await fetch('/api/settings');
+    if (!res.ok) return null;
+    return res.json();
+  },
+
+  // Session update
+  updateSession: async (sessionId, updates) => {
+    await fetch(`/api/sessions/${sessionId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    });
+  },
+
+  // ROI Events
+  getRoiEvents: async () => {
+    const res = await fetch('/api/roi');
+    return res.json();
+  },
+
+  createRoiEvent: async (data) => {
+    const res = await fetch('/api/roi', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return res.json();
+  },
+
+  updateRoiEvent: async (id, updates) => {
+    await fetch(`/api/roi/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    });
+  },
+
+  deleteRoiEvent: async (id) => {
+    await fetch(`/api/roi/${id}`, { method: 'DELETE' });
+  },
+
   // v3: Reactive orchestrator
   orchestrate: async (message, sessionId) => {
     const res = await fetch('/api/orchestrate', {
@@ -180,6 +230,22 @@ export const aura: AuraAPI = {
   },
 
   // UI layer — brutalist design components
+
+  // Settings persistence
+  saveSettings: async (settings) => {
+    const res = await fetch('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings),
+    });
+    if (!res.ok) throw new Error('Failed to save settings');
+  },
+
+  loadSettings: async () => {
+    const res = await fetch('/api/settings');
+    if (!res.ok) return null;
+    return res.json();
+  },
 
   getStatsV2: async (): Promise<TelemetryMetricsV2> => {
     try {
@@ -230,8 +296,8 @@ export const aura: AuraAPI = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: payload.prompt, sessionId: payload.sessionId }),
       }).then(r => r.json()).catch(() => ({ finalResponse: '' }));
-      onEvent({ type: 'token', ts: new Date().toISOString(), data: { text: data.finalResponse ?? '' } });
-      onEvent({ type: 'final', ts: new Date().toISOString(), data: {} });
+      onEvent('token', { type: 'token', ts: new Date().toISOString(), text: data.finalResponse ?? '' });
+      onEvent('final', { type: 'final', ts: new Date().toISOString() });
       return;
     }
     const reader = res.body.getReader();
@@ -247,7 +313,7 @@ export const aura: AuraAPI = {
         if (!line.startsWith('data: ')) continue;
         try {
           const evt = JSON.parse(line.slice(6));
-          onEvent(evt);
+          onEvent(evt.type || 'token', evt);
         } catch { /* skip malformed line */ }
       }
     }

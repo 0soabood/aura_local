@@ -16,8 +16,8 @@ describe('SynthesisAgent', () => {
   beforeEach(() => {
     registry = new ProviderRegistry();
     agent = new SynthesisAgent(registry);
-    // Make groq available so SYNTHESIS_MODELS finds groq:llama-3.1-8b-instant
-    vi.spyOn(registry, 'listProviders').mockReturnValue(['groq']);
+    // Make cohere available to match 'agent_orchestrator' role
+    vi.spyOn(registry, 'getAvailableProviders').mockReturnValue([{ id: 'cohere' } as any]);
   });
 
   describe('evaluate()', () => {
@@ -37,7 +37,7 @@ describe('SynthesisAgent', () => {
     });
 
     it('returns 0 when no healthy provider is available', () => {
-      vi.spyOn(registry, 'listProviders').mockReturnValue([]);
+      vi.spyOn(registry, 'getAvailableProviders').mockReturnValue([]);
       const events: BlackboardEvent[] = [
         evt({ event_type: 'user_message', author: 'user', content: 'hello' }),
       ];
@@ -57,8 +57,8 @@ describe('SynthesisAgent', () => {
     it('returns synthesis_complete event with model text', async () => {
       vi.spyOn(registry, 'call').mockResolvedValue({
         text: 'Final synthesized answer',
-        model: 'llama-3.1-8b-instant',
-        provider: 'groq',
+        model: 'command-a',
+        provider: 'cohere',
         latencyMs: 120,
         rateLimited: false,
       } as any);
@@ -74,8 +74,8 @@ describe('SynthesisAgent', () => {
     it('returns escalation_required when provider is rate-limited', async () => {
       vi.spyOn(registry, 'call').mockResolvedValue({
         text: '',
-        model: 'llama-3.1-8b-instant',
-        provider: 'groq',
+        model: 'command-a',
+        provider: 'cohere',
         latencyMs: 50,
         rateLimited: true,
         errorMessage: 'Rate limit exceeded',
@@ -90,7 +90,7 @@ describe('SynthesisAgent', () => {
     });
 
     it('throws when no healthy provider is available during execution', async () => {
-      vi.spyOn(registry, 'listProviders').mockReturnValue([]);
+      vi.spyOn(registry, 'getAvailableProviders').mockReturnValue([]);
       const events: BlackboardEvent[] = [
         evt({ event_type: 'user_message', author: 'user', content: 'hello' }),
       ];

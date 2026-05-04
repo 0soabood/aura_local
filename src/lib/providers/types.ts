@@ -22,7 +22,16 @@ export interface CallOptions {
   /** OpenAI-compatible tool definitions to pass to the model */
   tools?: any[];
   /** Pre-built messages array. When provided, takes precedence over prompt + systemPrompt. */
-  messages?: Array<{ role: 'system' | 'user' | 'assistant' | 'tool'; content: string; tool_call_id?: string }>;
+  messages?: Array<{
+    role: 'system' | 'user' | 'assistant' | 'tool';
+    content: string | null;
+    tool_call_id?: string;
+    tool_calls?: Array<{
+      id: string;
+      type: 'function';
+      function: { name: string; arguments: string };
+    }>;
+  }>;
 }
 
 export interface ProviderResult {

@@ -1,8 +1,40 @@
 @import "tailwindcss";
 
 :root {
+  /* ── Neubrutalist Design Tokens ─────────────────────────────── */
+  /* Typography */
+  --font-display: 'Fraunces', serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  /* Colors */
+  --bone: #f5f1eb;
+  --ink: #1a1a2e;
+  --oxblood: #8b1a1a;
+  --chartreuse: #d4ed3a;
+  --marigold: #f5c542;
+  --ultramarine: #3b4cca;
+
+  /* Semantic aliases */
+  --bg: var(--bone);
+  --text: var(--ink);
+  --panel: #ffffff;
+  --panel-2: #f9f9f9;
+  --border: var(--ink);
+  --rule: var(--ink);
+
+  /* Shadows & Borders */
+  --shadow-hard: 4px 4px 0 var(--rule);
+  --rule-thick: 2px solid var(--rule);
+
+  /* Spacing */
+  --gap-sm: 0.25rem;
+  --gap-md: 0.5rem;
+  --gap-lg: 1rem;
+
+  /* Legacy mappings for existing code */
   --bg-1: var(--panel);
   --bg-2: var(--panel-2);
   --text-1: var(--text);
+  --text-2: var(--text);
   --border-1: var(--border);
 }

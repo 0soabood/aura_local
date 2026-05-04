@@ -3,6 +3,7 @@
 // stamp, oxblood/chartreuse accents. Each tile navigates to a department.
 
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { Terminal as TerminalIcon, Map, BookMarked, BarChart3, ScrollText, Archive, Command } from 'lucide-react';
 import type { TelemetryMetricsV2, Session } from '../shared/types';
@@ -10,9 +11,17 @@ import { Mark } from './ui/atoms';
 
 const getAura = () => (window as any).aura;
 
-interface NavigationHubProps {
-  onNavigate: (view: string) => void;
-}
+// Navigation mapping from department keys to routes
+const routeMap: Record<string, string> = {
+  terminal: '/terminal',
+  roadmap: '/roadmap',
+  research: '/research',
+  roi: '/dash',
+  logs: '/logs',
+  archive: '/logs', // Archive maps to logs for now
+  chat: '/chat',
+  hub: '/hub',
+};
 
 interface Dept {
   n: string; key: string; title: string; sub: string; meta: string;
@@ -26,7 +35,8 @@ const ACCENTS = {
   paper:   { bg: 'var(--card)',       fg: 'var(--text)' },
 };
 
-export default function NavigationHub({ onNavigate }: NavigationHubProps) {
+export default function NavigationHub() {
+  const navigate = useNavigate();
   const [stats, setStats] = useState<TelemetryMetricsV2 | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [roadmapCount, setRoadmapCount] = useState(0);
@@ -75,6 +85,9 @@ export default function NavigationHub({ onNavigate }: NavigationHubProps) {
   const liveCount = validSessions.filter(s => s.state === 'running').length;
   const doneCount = validSessions.filter(s => s.state === 'done').length;
   const errorCount = validSessions.filter(s => s.state === 'error').length;
+
+  // Session resumption badges
+  const resumedCount = validSessions.filter(s => s.state === 'done' || s.state === 'error').length;
 
   const safeStats = stats && typeof stats === 'object' ? stats : null;
   const depts: Dept[] = [
@@ -159,7 +172,7 @@ export default function NavigationHub({ onNavigate }: NavigationHubProps) {
             return (
               <motion.button
                 key={d.key}
-                onClick={() => onNavigate(d.key)}
+                onClick={() => navigate(routeMap[d.key] || '/hub')}
                 initial={{ opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: i * 0.04, duration: 0.25 }}

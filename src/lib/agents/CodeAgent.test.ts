@@ -17,8 +17,8 @@ describe('CodeAgent', () => {
   beforeEach(() => {
     registry = new ProviderRegistry();
     agent = new CodeAgent(registry);
-    // groq is in CODE_MODELS as 'groq:llama-3.3-70b-versatile'
-    vi.spyOn(registry, 'listProviders').mockReturnValue(['groq']);
+    // vertex is in ModelConfig for 'daily_driver'
+    vi.spyOn(registry, 'getAvailableProviders').mockReturnValue([{ id: 'vertex' } as any]);
   });
 
   describe('evaluate()', () => {
@@ -46,7 +46,7 @@ describe('CodeAgent', () => {
     });
 
     it('returns 0 when no healthy provider is available', () => {
-      vi.spyOn(registry, 'listProviders').mockReturnValue([]);
+      vi.spyOn(registry, 'getAvailableProviders').mockReturnValue([]);
       const events: BlackboardEvent[] = [
         evt({ event_type: 'user_message', author: 'user', content: 'implement a binary search function' }),
       ];
@@ -58,8 +58,8 @@ describe('CodeAgent', () => {
     it('returns code_written event when model responds with text and no tool calls', async () => {
       vi.spyOn(registry, 'call').mockResolvedValue({
         text: '```typescript\nfunction sort(arr: number[]) { return arr.sort(); }\n```',
-        model: 'llama-3.3-70b-versatile',
-        provider: 'groq',
+        model: 'gemini-2.5-flash',
+        provider: 'vertex',
         latencyMs: 350,
         rateLimited: false,
         toolCalls: [],
@@ -81,14 +81,14 @@ describe('CodeAgent', () => {
         async () => 'Found: src/utils/sort.ts',
       );
       agent = new CodeAgent(registry, mockRegistry);
-      vi.spyOn(registry, 'listProviders').mockReturnValue(['groq']);
+      vi.spyOn(registry, 'getAvailableProviders').mockReturnValue([{ id: 'vertex' } as any]);
 
       vi.spyOn(registry, 'call')
         // Step 1: LLM calls the search_codebase tool
         .mockResolvedValueOnce({
           text: '',
-          model: 'llama-3.3-70b-versatile',
-          provider: 'groq',
+          model: 'gemini-2.5-flash',
+          provider: 'vertex',
           latencyMs: 150,
           rateLimited: false,
           toolCalls: [{ id: 'tc1', function: { name: 'search_codebase', arguments: JSON.stringify({ query: 'sort function' }) } }],
@@ -96,8 +96,8 @@ describe('CodeAgent', () => {
         // Step 2: LLM reads the tool result and produces final code
         .mockResolvedValueOnce({
           text: '// src/utils/sort.ts\nfunction sort(arr: number[]) { return arr.sort(); }',
-          model: 'llama-3.3-70b-versatile',
-          provider: 'groq',
+          model: 'gemini-2.5-flash',
+          provider: 'vertex',
           latencyMs: 200,
           rateLimited: false,
           toolCalls: [],
@@ -119,21 +119,21 @@ describe('CodeAgent', () => {
         async () => 'Error: ENOENT no such file',
       );
       agent = new CodeAgent(registry, mockRegistry);
-      vi.spyOn(registry, 'listProviders').mockReturnValue(['groq']);
+      vi.spyOn(registry, 'getAvailableProviders').mockReturnValue([{ id: 'vertex' } as any]);
 
       vi.spyOn(registry, 'call')
         .mockResolvedValueOnce({
           text: '',
-          model: 'llama-3.3-70b-versatile',
-          provider: 'groq',
+          model: 'gemini-2.5-flash',
+          provider: 'vertex',
           latencyMs: 100,
           rateLimited: false,
           toolCalls: [{ id: 'tc1', function: { name: 'get_file_skeleton', arguments: JSON.stringify({ filePath: 'nonexistent.ts' }) } }],
         } as any)
         .mockResolvedValueOnce({
           text: 'I could not find the file. Please check the path.',
-          model: 'llama-3.3-70b-versatile',
-          provider: 'groq',
+          model: 'gemini-2.5-flash',
+          provider: 'vertex',
           latencyMs: 90,
           rateLimited: false,
           toolCalls: [],
