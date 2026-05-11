@@ -1,0 +1,29 @@
+name: CD (Deploy)
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Production Artifacts
+        run: npm run build
+
+      # In a real scenario, this is where you'd push to a registry 
+      # or trigger a deployment to a VPS/Server.
+      - name: Notify Deployment
+        run: echo "Artifacts built successfully for main branch."
