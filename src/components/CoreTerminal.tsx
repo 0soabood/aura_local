@@ -6,6 +6,7 @@ import { DebugPanel } from './DebugPanel';
 import { ChatMessage } from './ChatMessage';
 import { useBrainDumpMode, useSetBrainDumpMode, useSelectedModel, useSetSelectedModel } from '../stores/useAura';
 import SettingsPanel from './settings/SettingsPanel';
+import { VetoPanel } from './VetoPanel';
 
 const getAura = () => (window as any).aura;
 
@@ -98,6 +99,9 @@ export default function CoreTerminal() {
   const [status, setStatus] = useState<'idle' | 'running' | 'complete' | 'error'>('idle');
   const [activeId, setActiveId] = useState<string | null>(null);
   const [mode, setMode] = useState('auto');
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [modelSearch, setModelSearch] = useState('');
+  const modelPickerRef = useRef<HTMLDivElement>(null);
   
   const [debugOpen, setDebugOpen] = useState(false);
   const [debugData, setDebugData] = useState<DebugData>({ events: [], latency: 0, loops: 0, termination: 'none' });
@@ -110,6 +114,7 @@ export default function CoreTerminal() {
   const wsRef = useRef<WebSocket | null>(null);
   const [energyMode, setEnergyMode] = useState<'low' | 'high'>('high');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [vetoPanelOpen, setVetoPanelOpen] = useState(false);
   // Use Zustand store for brainDumpMode and model selection
   const brainDumpMode = useBrainDumpMode();
   const setBrainDumpMode = useSetBrainDumpMode();
@@ -144,30 +149,16 @@ export default function CoreTerminal() {
         if (modelsData && Array.isArray(modelsData.providers)) {
           setModelProviders(modelsData.providers);
         } else {
-          // Fallback to hardcoded list if API fails
+          // Fallback to a single OpenRouter group if the API is unavailable.
           setModelProviders([
-            {
-              id: 'google',
-              name: 'GOOGLE',
-              hasKey: true,
-              models: [
-                { id: 'google:gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
-              ],
-            },
-            {
-              id: 'vertex',
-              name: 'VERTEX',
-              hasKey: true,
-              models: [
-                { id: 'vertex:gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
-              ],
-            },
             {
               id: 'openrouter',
               name: 'OPENROUTER',
-              hasKey: false,
+              hasKey: true,
               models: [
-                { id: 'openrouter:meta-llama/llama-3.3-70b-instruct:free', label: 'Llama 3.3 70B' },
+                { id: 'openrouter:google/gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+                { id: 'openrouter:meta-llama/llama-3.3-70b-instruct:free', label: 'Llama 3.3 70B (Free)' },
+                { id: 'openrouter:deepseek/deepseek-chat', label: 'DeepSeek Chat' },
               ],
             },
           ]);
@@ -181,6 +172,18 @@ export default function CoreTerminal() {
 
     fetchModels();
   }, []);
+
+  // Close model picker on outside click
+  useEffect(() => {
+    if (!modelPickerOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (modelPickerRef.current && !modelPickerRef.current.contains(e.target as Node)) {
+        setModelPickerOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [modelPickerOpen]);
 
   // Helper to get the display label for the selected model
   const getSelectedModelLabel = () => {
@@ -350,10 +353,11 @@ export default function CoreTerminal() {
       
       // Add Brain Dump Mode prompt if enabled
       if (brainDumpMode) {
-        routedMessage = `[BRAIN DUMP MODE] The user has provided a vague goal or idea. ` +
+        routedMessage = `[BRAIN DUMP MODE] The user has provided a vague goal or idea: "${text}".\n\n` +
           `Break it down into a structured, actionable checklist with clear steps. ` +
-          `Format as a markdown checklist with - [ ] for incomplete items.\n\nUser goal: ${text}`;
+          `Format as a markdown checklist with - [ ] for incomplete items. Do not start working on the steps, just provide the checklist.`;
         console.log('[Brain Dump Mode] Decomposing vague goal into checklist...');
+        setBrainDumpMode(false); // Auto-toggle off after single use
       }
       
       // Add selected model if not 'auto'
@@ -746,38 +750,154 @@ export default function CoreTerminal() {
               <option value="code">CODE</option>
             </select>
 
-            {/* Model Selector with Provider Grouping */}
-            <select
-              value={selectedModel}
-              onChange={e => setSelectedModel(e.target.value)}
-              style={{
-                backgroundColor: 'var(--bone)',
-                color: 'var(--ink)',
-                border: 'var(--rule-thick)',
-                borderRadius: '0.5rem',
-                padding: '0.75rem',
-                fontSize: '0.875rem',
-                fontFamily: 'var(--font-mono)',
-                fontWeight: 600,
-                outline: 'none',
-                cursor: status === 'running' ? 'not-allowed' : 'pointer',
-                opacity: status === 'running' ? 0.5 : 1,
-                minWidth: '200px',
-              }}
-              disabled={status === 'running'}
-              title="Select AI model"
-            >
-              <option value="auto">AUTO (DEFAULT)</option>
-              {modelProviders.map(provider => (
-                <optgroup key={provider.id} label={`${provider.name}${!provider.hasKey ? ' 🔒' : ''}`}>
-                  {provider.models.map(model => (
-                    <option key={model.id} value={model.id}>
-                      {model.label.toUpperCase()}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
+            {/* Model Selector — searchable dropdown */}
+            <div ref={modelPickerRef} style={{ position: 'relative' }}>
+              <button
+                onClick={() => { if (status !== 'running') { setModelPickerOpen(v => !v); setModelSearch(''); } }}
+                disabled={status === 'running'}
+                style={{
+                  backgroundColor: 'var(--bone)',
+                  color: 'var(--ink)',
+                  border: 'var(--rule-thick)',
+                  borderRadius: '0.5rem',
+                  padding: '0.75rem',
+                  fontSize: '0.875rem',
+                  fontFamily: 'var(--font-mono)',
+                  fontWeight: 600,
+                  cursor: status === 'running' ? 'not-allowed' : 'pointer',
+                  opacity: status === 'running' ? 0.5 : 1,
+                  minWidth: '200px',
+                  textAlign: 'left',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                }}
+                title="Select AI model"
+              >
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '160px' }}>
+                  {getSelectedModelLabel()}
+                </span>
+                <span style={{ fontSize: '0.7rem', opacity: 0.6 }}>{modelPickerOpen ? '▲' : '▼'}</span>
+              </button>
+
+              {modelPickerOpen && (
+                <div style={{
+                  position: 'absolute',
+                  bottom: 'calc(100% + 4px)',
+                  left: 0,
+                  zIndex: 9999,
+                  background: 'var(--bone)',
+                  border: 'var(--rule-thick)',
+                  borderRadius: '0.5rem',
+                  width: '320px',
+                  maxHeight: '420px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  boxShadow: '4px 4px 0 var(--ink)',
+                }}>
+                  <div style={{ padding: '0.5rem', borderBottom: '2px solid var(--ink)' }}>
+                    <input
+                      autoFocus
+                      type="text"
+                      placeholder="Search models..."
+                      value={modelSearch}
+                      onChange={e => setModelSearch(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '0.5rem',
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: '0.8rem',
+                        fontWeight: 600,
+                        border: '2px solid var(--ink)',
+                        borderRadius: '0.25rem',
+                        background: 'var(--surface, #f5f5f5)',
+                        color: 'var(--ink)',
+                        outline: 'none',
+                        boxSizing: 'border-box',
+                      }}
+                    />
+                  </div>
+                  <div style={{ overflowY: 'auto', flex: 1 }}>
+                    {/* AUTO option */}
+                    {('auto'.includes(modelSearch.toLowerCase()) || 'default'.includes(modelSearch.toLowerCase())) && (
+                      <div
+                        onClick={() => { setSelectedModel('auto'); setModelPickerOpen(false); }}
+                        style={{
+                          padding: '0.5rem 0.75rem',
+                          cursor: 'pointer',
+                          fontFamily: 'var(--font-mono)',
+                          fontSize: '0.8rem',
+                          fontWeight: selectedModel === 'auto' ? 800 : 600,
+                          background: selectedModel === 'auto' ? 'var(--ink)' : 'transparent',
+                          color: selectedModel === 'auto' ? 'var(--bone)' : 'var(--ink)',
+                          borderBottom: '1px solid rgba(0,0,0,0.1)',
+                        }}
+                        onMouseEnter={e => { if (selectedModel !== 'auto') (e.currentTarget as HTMLElement).style.background = 'rgba(0,0,0,0.08)'; }}
+                        onMouseLeave={e => { if (selectedModel !== 'auto') (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                      >
+                        AUTO (DEFAULT)
+                      </div>
+                    )}
+                    {modelProviders.map(provider => {
+                      const filtered = provider.models.filter(m =>
+                        m.label.toLowerCase().includes(modelSearch.toLowerCase()) ||
+                        m.id.toLowerCase().includes(modelSearch.toLowerCase())
+                      );
+                      if (filtered.length === 0) return null;
+                      return (
+                        <div key={provider.id}>
+                          <div style={{
+                            padding: '0.35rem 0.75rem',
+                            fontFamily: 'var(--font-mono)',
+                            fontSize: '0.65rem',
+                            fontWeight: 800,
+                            letterSpacing: '0.12em',
+                            opacity: 0.5,
+                            background: 'rgba(0,0,0,0.04)',
+                            textTransform: 'uppercase',
+                          }}>
+                            {provider.name}{!provider.hasKey ? ' 🔒' : ''}
+                          </div>
+                          {filtered.map(model => (
+                            <div
+                              key={model.id}
+                              onClick={() => { setSelectedModel(model.id); setModelPickerOpen(false); }}
+                              style={{
+                                padding: '0.45rem 0.75rem 0.45rem 1.25rem',
+                                cursor: 'pointer',
+                                fontFamily: 'var(--font-mono)',
+                                fontSize: '0.78rem',
+                                fontWeight: selectedModel === model.id ? 800 : 500,
+                                background: selectedModel === model.id ? 'var(--ink)' : 'transparent',
+                                color: selectedModel === model.id ? 'var(--bone)' : 'var(--ink)',
+                                borderBottom: '1px solid rgba(0,0,0,0.06)',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                              }}
+                              onMouseEnter={e => { if (selectedModel !== model.id) (e.currentTarget as HTMLElement).style.background = 'rgba(0,0,0,0.08)'; }}
+                              onMouseLeave={e => { if (selectedModel !== model.id) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                              title={model.id}
+                            >
+                              {model.label}
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })}
+                    {modelSearch && modelProviders.every(p => p.models.filter(m =>
+                      m.label.toLowerCase().includes(modelSearch.toLowerCase()) ||
+                      m.id.toLowerCase().includes(modelSearch.toLowerCase())
+                    ).length === 0) && (
+                      <div style={{ padding: '1rem', fontFamily: 'var(--font-mono)', fontSize: '0.8rem', opacity: 0.5, textAlign: 'center' }}>
+                        No models match "{modelSearch}"
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
 
             <button
               onClick={() => setSettingsOpen(true)}
@@ -839,6 +959,26 @@ export default function CoreTerminal() {
               title={brainDumpMode ? 'Brain Dump Mode: ON - Will decompose vague goals into checklist' : 'Brain Dump Mode: OFF'}
             >
               {brainDumpMode ? '🧠 DUMP ON' : '🧠 DUMP'}
+            </button>
+
+            <button
+              onClick={() => setVetoPanelOpen(!vetoPanelOpen)}
+              style={{
+                padding: '0.75rem',
+                borderRadius: '0.5rem',
+                fontSize: '0.875rem',
+                border: 'var(--rule-thick)',
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+                backgroundColor: vetoPanelOpen ? 'var(--oxblood)' : 'var(--bone)',
+                color: vetoPanelOpen ? 'var(--bone)' : 'var(--ink)',
+                fontFamily: 'var(--font-mono)',
+                fontWeight: 600,
+                letterSpacing: '0.05em',
+              }}
+              title="Toggle Veto Panel - Pending Approvals"
+            >
+              ⚠️ VETO
             </button>
             
             <div style={{ flex: 1, position: 'relative' }}>
@@ -932,138 +1072,11 @@ export default function CoreTerminal() {
                 <span style={{ opacity: 0.7 }}>— {debugData.latency}ms</span>
               )}
               <span style={{ opacity: 0.5 }}>|</span>
-              <span style={{ color: 'var(--chartreuse)' }}>{activeProvider.toUpperCase()}</span>
+              <span style={{ color: 'var(--chartreuse)' }}>{activeProvider}</span>
             </div>
           </div>
         </div>
       </section>
-
-      {/* DEBUG DRAWER */}
-      {!debugOpen ? (
-        <div 
-          onClick={() => setDebugOpen(true)} 
-          style={{
-            width: '3rem',
-            borderLeft: 'var(--rule-thick)',
-            backgroundColor: 'var(--ink)',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            paddingTop: '1.5rem',
-            cursor: 'pointer',
-            transition: 'background-color 0.2s',
-          }}
-          onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.05)'; }}
-          onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'var(--ink)'; }}
-          title="Expand Debug Trace"
-        >
-          <ChevronsLeft size={18} style={{ color: 'var(--bone)', opacity: 0.5 }} />
-          <div style={{
-            marginTop: '2rem',
-            fontSize: '0.6875rem',
-            color: 'var(--bone)',
-            opacity: 0.6,
-            fontFamily: 'var(--font-mono)',
-            letterSpacing: '0.1em',
-            writingMode: 'vertical-rl' as const,
-            transform: 'rotate(180deg)',
-          }}>
-            DEBUG TRACE
-          </div>
-        </div>
-      ) : (
-        <aside style={{
-          width: '20rem',
-          borderLeft: 'var(--rule-thick)',
-          backgroundColor: 'var(--ink)',
-          display: 'flex',
-          flexDirection: 'column',
-        }}>
-          <div style={{
-            padding: '1rem',
-            borderBottom: 'var(--rule-thick)',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            backgroundColor: 'rgba(255,255,255,0.05)',
-          }}>
-            <span style={{
-              fontSize: '0.875rem',
-              fontWeight: 600,
-              color: 'var(--bone)',
-              letterSpacing: '0.05em',
-              fontFamily: 'var(--font-mono)',
-            }}>TRACE & TELEMETRY</span>
-            <button onClick={() => setDebugOpen(false)} style={{
-              color: 'var(--bone)',
-              opacity: 0.6,
-              padding: '0.25rem',
-              borderRadius: '0.25rem',
-              border: 'none',
-              background: 'transparent',
-              cursor: 'pointer',
-              transition: 'all 0.2s',
-            }} onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.6'; e.currentTarget.style.backgroundColor = 'transparent'; }}>
-              <ChevronsRight size={18} />
-            </button>
-          </div>
-          
-          <div style={{
-            padding: '1rem',
-            borderBottom: 'var(--rule-thick)',
-            display: 'flex',
-            gap: '1rem',
-            fontSize: '0.75rem',
-            fontFamily: 'var(--font-mono)',
-            color: 'var(--bone)',
-            opacity: 0.6,
-            backgroundColor: 'rgba(0,0,0,0.4)',
-          }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-              <span style={{ textTransform: 'uppercase' as const, fontSize: '0.5625rem', letterSpacing: '0.1em', opacity: 0.6 }}>LOOPS</span>
-              <span style={{ color: 'var(--bone)', opacity: 1 }}>{debugData.loops}</span>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-              <span style={{ textTransform: 'uppercase' as const, fontSize: '0.5625rem', letterSpacing: '0.1em', opacity: 0.6 }}>LATENCY</span>
-              <span style={{ color: 'var(--bone)', opacity: 1 }}>{debugData.latency}ms</span>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-              <span style={{ textTransform: 'uppercase' as const, fontSize: '0.5625rem', letterSpacing: '0.1em', opacity: 0.6 }}>TERM</span>
-              <span style={{ color: 'var(--bone)', opacity: 1, overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '5rem' }} title={debugData.termination}>{debugData.termination}</span>
-            </div>
-          </div>
-
-          <div style={{
-            flex: 1,
-            overflowY: 'auto',
-            padding: '1rem',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '0.75rem',
-            backgroundColor: 'var(--ink)',
-          }}>
-            {debugData.events.length === 0 ? (
-              <div style={{
-                color: 'var(--bone)',
-                opacity: 0.6,
-                fontSize: '0.75rem',
-                textAlign: 'center',
-                padding: '2rem 0',
-              }}>NO TRACE DATA AVAILABLE.</div>
-            ) : (
-              [...debugData.events].reverse().map((ev, i) => renderDebugEvent(ev, i))
-            )}
-          </div>
-        </aside>
-      )}
-
-      {/* Settings Panel */}
-      <SettingsPanel
-        isOpen={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-        modelProviders={modelProviders}
-      />
     </div>
   );
 }

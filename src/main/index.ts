@@ -14,13 +14,7 @@ import dotenv from 'dotenv';
 dotenv.config({ path: '.env' });
 
 const PROVIDER_ENV_KEYS: Record<string, string> = {
-  vertex:     'GOOGLE_CLOUD_PROJECT',
-  google:     'GOOGLE_AI_STUDIO_API_KEY',
-  groq:       'GROQ_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
-  mistral:    'MISTRAL_API_KEY',
-  cohere:     'COHERE_API_KEY',
-  deepseek:   'DEEPSEEK_API_KEY',
 };
 const available = Object.entries(PROVIDER_ENV_KEYS)
   .filter(([, envKey]) => !!process.env[envKey])

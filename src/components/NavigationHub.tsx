@@ -92,11 +92,13 @@ export default function NavigationHub() {
   const safeStats = stats && typeof stats === 'object' ? stats : null;
   const depts: Dept[] = [
     { n: '01', key: 'terminal', title: 'TERMINAL', sub: 'orchestration / streams',  meta: `${liveCount} LIVE · ${doneCount} DONE`, Icon: TerminalIcon, accent: 'chart', lead: true },
+    /* DISABLED FOR MVP
     { n: '02', key: 'roadmap',  title: 'ROADMAP',  sub: 'lanes / priority / roi',   meta: `${roadmapCount} CARDS`, Icon: Map,        accent: 'ink' },
     { n: '03', key: 'research', title: 'RESEARCH', sub: 'snippets / verifications', meta: `${researchCount} ENTRIES`, Icon: BookMarked, accent: 'paper' },
     { n: '04', key: 'roi',      title: 'ROI',      sub: 'latency / cost / routes',  meta: safeStats ? `$${Number(safeStats.est_token_cost_usd || 0).toFixed(2)}` : '—', Icon: BarChart3, accent: 'oxblood' },
     { n: '05', key: 'logs',     title: 'LOGS',     sub: 'audit / ledger',           meta: `${Number(logsCount || 0).toLocaleString()}`, Icon: ScrollText, accent: 'paper' },
     { n: '06', key: 'archive',  title: 'ARCHIVE',  sub: 'sessions / exports',       meta: `${validSessions.filter(s => s.state === 'archived').length}`, Icon: Archive, accent: 'ink' },
+    */
   ];
 
   return (

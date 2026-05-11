@@ -1,6 +1,6 @@
 import { SupervisorTask, SupervisorResponse, SupervisorPlan, Step, SupervisorDomain } from '../shared/types';
 import { ProviderRegistry } from './providers/ProviderRegistry';
-import { resolveModel } from './ModelConfig';
+import { resolveModel } from './ModelConfig.server';
 import { Blackboard } from './Blackboard';
 import { SupervisorStatsRepository } from '../db/repositories/SupervisorStatsRepository';
 import { DOMAIN_CONFIG, buildSupervisorPrompt, classifyDomain, assembleSystemPrompt } from './supervisors/prompts';
@@ -72,11 +72,11 @@ export class SupervisorRouter {
       const stepStart = Date.now();
       try {
         const result = await this.registry.call(
-          step.model,
-          step.prompt,
+          step.model || resolveModel(config.fallbackRole),
+          step.prompt || '',
           {
             temperature: 0.3,
-            responseFormat: step.expected_output_shape,
+            responseFormat: step.expected_output_shape as 'code' | 'text' | 'json' | undefined,
             systemPrompt: workerSystemPrompt,
           },
         );
@@ -95,7 +95,7 @@ export class SupervisorRouter {
           console.warn(`[SupervisorRouter] Step failed on ${step.model}, falling back to ${fallbackModel}`);
           const fallback = await this.registry.call(
             fallbackModel,
-            step.prompt,
+            step.prompt || '',
             { temperature: 0.3, systemPrompt: workerSystemPrompt },
           );
           executedSteps.push({ ...step, result: fallback.text, latency_ms: Date.now() - stepStart });
@@ -112,7 +112,7 @@ export class SupervisorRouter {
     if (Object.keys(plan.blackboard_updates ?? {}).length > 0) {
       this.blackboard.publishMany(
         task.sessionId,
-        plan.blackboard_updates,
+        plan.blackboard_updates || {},
         config.supervisorRouting,
         3600, // 1-hour TTL
       );
@@ -120,7 +120,7 @@ export class SupervisorRouter {
 
     // 5. Record stats
     try {
-      SupervisorStatsRepository.record(config.name, domain, plan.roi_estimate, totalLatency);
+      SupervisorStatsRepository.record(config.name, domain, plan.roi_estimate ?? 5, totalLatency);
     } catch (err: any) {
       console.warn('[SupervisorRouter] Stats recording failed:', err.message);
     }

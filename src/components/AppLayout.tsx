@@ -39,22 +39,16 @@ export function AppLayout() {
         if (modelsData && Array.isArray(modelsData.providers)) {
           setModelProviders(modelsData.providers);
         } else {
-          // Fallback to hardcoded list if API fails
+          // Fallback to a single OpenRouter group if the API is unavailable.
           setModelProviders([
-            {
-              id: 'google',
-              name: 'GOOGLE',
-              hasKey: true,
-              models: [
-                { id: 'google:gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
-              ],
-            },
             {
               id: 'openrouter',
               name: 'OPENROUTER',
-              hasKey: false,
+              hasKey: true,
               models: [
-                { id: 'openrouter:meta-llama/llama-3.3-70b-instruct:free', label: 'Llama 3.3 70B' },
+                { id: 'openrouter:google/gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+                { id: 'openrouter:meta-llama/llama-3.3-70b-instruct:free', label: 'Llama 3.3 70B (Free)' },
+                { id: 'openrouter:deepseek/deepseek-chat', label: 'DeepSeek Chat' },
               ],
             },
           ]);

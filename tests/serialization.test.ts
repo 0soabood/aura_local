@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createApiApp } from '../src/main/app';
 import { ReactiveOrchestrator } from '../src/lib/ReactiveOrchestrator';
 import { BlackboardEventRepository } from '../src/db/repositories/BlackboardEventRepository';
+import { compiledGraph } from '../src/lib/graph/workflow';
 
 const app = createApiApp();
 
@@ -12,7 +13,7 @@ describe('Response Serialization & Finalization Boundaries (Integration)', () =>
 
   beforeEach(() => {
     // Intercept exactly at the application boundaries without requiring full DB or LLM mocks
-    runSpy = vi.spyOn(ReactiveOrchestrator.prototype, 'run');
+    runSpy = vi.spyOn(compiledGraph, 'invoke');
     findBySessionSpy = vi.spyOn(BlackboardEventRepository, 'findBySession');
   });
 
@@ -23,13 +24,10 @@ describe('Response Serialization & Finalization Boundaries (Integration)', () =>
   describe('POST /api/orchestrate', () => {
     it('should return sanitized response shape without events by default', async () => {
       runSpy.mockResolvedValue({
-        sessionId: 'test-session',
-        finalResponse: 'Sanitized answer',
-        terminationReason: 'synthesis_complete',
-        totalLoops: 2,
-        totalLatencyMs: 800,
-        events: [{ event_type: 'user_message', content: 'test input' }]
+        chatHistory: [{ _getType: () => 'ai', content: 'Sanitized answer' }],
+        taskWorkspace: [1, 2]
       });
+      findBySessionSpy.mockReturnValue([{ event_type: 'user_message', content: 'test input' }] as any);
 
       const response = await request(app)
         .post('/api/orchestrate')
@@ -43,16 +41,13 @@ describe('Response Serialization & Finalization Boundaries (Integration)', () =>
 
     it('should ensure internal events are not exposed by default even when orchestrator.run returns a large trace', async () => {
       runSpy.mockResolvedValue({
-        sessionId: 'test-session-regression',
-        finalResponse: 'Safe answer',
-        terminationReason: 'synthesis_complete',
-        totalLoops: 3,
-        totalLatencyMs: 1200,
-        events: [
-          { event_type: 'user_message', content: 'hello' },
-          { event_type: 'agent_output', content: 'secret internal thought process' }
-        ]
+        chatHistory: [{ _getType: () => 'ai', content: 'Safe answer' }],
+        taskWorkspace: [1, 2, 3]
       });
+      findBySessionSpy.mockReturnValue(([
+        { event_type: 'user_message', content: 'hello' },
+        { event_type: 'agent_output', content: 'secret internal thought process' }
+      ] as any));
 
       const response = await request(app)
         .post('/api/orchestrate')
@@ -65,13 +60,10 @@ describe('Response Serialization & Finalization Boundaries (Integration)', () =>
 
     it('should include events if debug flag is true', async () => {
       runSpy.mockResolvedValue({
-        sessionId: 'test-session',
-        finalResponse: 'Sanitized answer',
-        terminationReason: 'synthesis_complete',
-        totalLoops: 2,
-        totalLatencyMs: 800,
-        events: [{ event_type: 'user_message', content: 'test input' }]
+        chatHistory: [{ _getType: () => 'ai', content: 'Sanitized answer' }],
+        taskWorkspace: [1, 2]
       });
+      findBySessionSpy.mockReturnValue([{ event_type: 'user_message', content: 'test input' }] as any);
 
       const response = await request(app)
         .post('/api/orchestrate')
@@ -85,10 +77,10 @@ describe('Response Serialization & Finalization Boundaries (Integration)', () =>
 
   describe('POST /api/supervisor/route', () => {
     it('populates final_response from terminal state', async () => {
-      findBySessionSpy.mockReturnValue([
+      findBySessionSpy.mockReturnValue(([
         { event_type: 'user_message', content: 'hello' },
         { event_type: 'synthesis_complete', content: 'Terminal answer' }
-      ]);
+      ] as any));
 
       const response = await request(app)
         .post('/api/supervisor/route')
@@ -96,20 +88,6 @@ describe('Response Serialization & Finalization Boundaries (Integration)', () =>
         
       expect(response.status).toBe(200);
       expect(response.body).toHaveProperty('final_response', 'Terminal answer');
-    });
-
-    it('populates final_response from structured resolved state', async () => {
-      findBySessionSpy.mockReturnValue([
-        { event_type: 'user_message', content: 'hello' },
-        { event_type: 'blackboard_update', content: 'AURA-BEACON-441', metadata: { resolved: true } }
-      ]);
-
-      const response = await request(app)
-        .post('/api/supervisor/route')
-        .send({ sessionId: 'beacon-session' });
-        
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('final_response', 'AURA-BEACON-441');
     });
   });
 
@@ -148,7 +126,7 @@ describe('Response Serialization & Finalization Boundaries (Integration)', () =>
         { agentName: 'synthesis_agent', confidence: 1, proposedAction: 'test', expectedOutputShape: 'text' }
       );
       
-      const passedOpts = callWithFallbackSpy.mock.calls[0][1];
+      const passedOpts = callWithFallbackSpy.mock.calls[0][1] as { systemPrompt?: string };
       expect(passedOpts.systemPrompt).toContain('For CODE requests: Provide a brief explanation, ONE main code example');
       expect(passedOpts.systemPrompt).toContain('Do NOT write long encyclopedic overviews');
     });

@@ -1,10 +1,13 @@
-import { StateGraph, START, END, MemorySaver } from '@langchain/langgraph';
+import { StateGraph, START, END, interrupt } from '@langchain/langgraph';
 import { SqliteSaver } from '@langchain/langgraph-checkpoint-sqlite';
 import { BaseMessage, AIMessage } from '@langchain/core/messages';
 import { AuraStateSchema } from './state';
 import { ResearchAgent } from '../agents/ResearchAgent';
 import { CodeAgent } from '../agents/CodeAgent';
 import { SynthesisAgent } from '../agents/SynthesisAgent';
+import { BureaucracyAgent } from '../agents/BureaucracyAgent';
+import { EtsyAgent } from '../agents/EtsyAgent';
+import { FundingAgent } from '../agents/FundingAgent';
 import { ProviderRegistry } from '../providers/ProviderRegistry';
 import { ToolRegistry } from '../tools/registry';
 import { writeMemoryDef, writeMemoryFn } from '../tools/builtin/write_memory';
@@ -14,11 +17,31 @@ import { listDirectoryDef, listDirectoryFn } from '../tools/builtin/list_directo
 import { writeFileDef, writeFileFn } from '../tools/builtin/write_file';
 import { editFileDef, editFileFn } from '../tools/builtin/edit_file';
 import { runCommandDef, runCommandFn } from '../tools/builtin/run_command';
-import { resolveModel, truncatePayload, ModelRole } from '../ModelConfig';
+import { generateDocumentDef, generateDocumentFn } from '../tools/builtin/generate_document';
+import { createEtsyListingDef, createEtsyListingFn, updateEtsyListingDef, updateEtsyListingFn, publishToPrintifyDef, publishToPrintifyFn } from '../tools/builtin/etsy_printify';
+import { generateBusinessPlanDef, generateBusinessPlanFn, generatePitchDeckDef, generatePitchDeckFn } from '../tools/builtin/funding';
+import { firecrawlDef, firecrawlFn } from '../tools/builtin/firecrawl';
+import { truncatePayload, ModelRole } from '../ModelConfig';
+import { resolveModel } from '../ModelConfig.server';
 import { searchRelevantFiles, formatContextForPrompt } from '../context/PseudoVectorEngine';
+import { VetoManager } from '../veto/VetoManager';
+import { VetoApprovalNeededError } from '../veto/VetoError';
 import db from '../../db/index';
 import { BlackboardEvent, AgentBid } from '../../shared/types';
 import { broadcastEvent } from '../debug';
+
+// Store veto managers per session
+const sessionVetoManagers = new Map<string, VetoManager>();
+
+export function getVetoManager(sessionId: string): VetoManager {
+  if (!sessionVetoManagers.has(sessionId)) {
+    const manager = new VetoManager(sessionId, {
+      defaultBehavior: 'require-approval',
+    });
+    sessionVetoManagers.set(sessionId, manager);
+  }
+  return sessionVetoManagers.get(sessionId)!;
+}
 
 /**
  * Resolve the model to use for a given agent and role.
@@ -61,11 +84,25 @@ const toolRegistry = new ToolRegistry()
   .register(writeMemoryDef,     writeMemoryFn)
   .register(writeFileDef,       writeFileFn)
   .register(editFileDef,        editFileFn)
-  .register(runCommandDef,      runCommandFn);
+  .register(runCommandDef,      runCommandFn)
+  .register(generateDocumentDef, generateDocumentFn)
+  .register(createEtsyListingDef, createEtsyListingFn)
+  .register(updateEtsyListingDef, updateEtsyListingFn)
+  .register(publishToPrintifyDef, publishToPrintifyFn)
+  .register(generateBusinessPlanDef, generateBusinessPlanFn)
+  .register(generatePitchDeckDef, generatePitchDeckFn)
+  .register(firecrawlDef, firecrawlFn);
+
+// Initialize Veto Manager for authorization layer
+// VetoManager will be created per-session in the orchestrator node
+
 const agents = [
   new ResearchAgent(registry, toolRegistry),
   new CodeAgent(registry, toolRegistry),
   new SynthesisAgent(registry, toolRegistry),
+  new BureaucracyAgent(registry, toolRegistry),
+  new EtsyAgent(registry, toolRegistry),
+  new FundingAgent(registry, toolRegistry),
 ];
 
 /**
@@ -175,8 +212,13 @@ async function orchestratorNode(state: typeof AuraStateSchema.State) {
     const allowMode1 = synthBid.confidence >= 0.85 && specialistOutputExists && !specialistBiddingNow;
     // Allow Mode 2 (greeting) only for genuine greetings
     const allowMode2 = synthBid.confidence < 0.85 && isSynthesisGreeting(lastUserMsg);
+    // Allow Mode 3 (Brain Dump bypass)
+    const isBrainDump = lastUserMsg.includes('[BRAIN DUMP MODE]');
     
-    if (!allowMode1 && !allowMode2) {
+    if (isBrainDump) {
+      bids[synthIdx] = { ...synthBid, confidence: 0.95, proposedAction: 'Decompose vague goal into structured checklist' };
+      console.log('[Graph] Brain dump bypass - routing to synthesis agent');
+    } else if (!allowMode1 && !allowMode2) {
       bids[synthIdx] = { ...synthBid, confidence: 0 };
       console.log('[Graph] Synthesis guard activated - blocking synthesis agent');
     }
@@ -266,11 +308,17 @@ async function specialistNode(state: typeof AuraStateSchema.State) {
   const agent = agents.find(a => a.name === state.activeAgent);
   if (!agent) throw new Error(`Agent ${state.activeAgent} not found.`);
 
+  // Initialize veto manager for this session
+  if (state.sessionId) {
+    const vetoManager = getVetoManager(state.sessionId);
+    toolRegistry.setVetoManager(vetoManager);
+  }
+
   // Convert to legacy events so the agent can read the current thread
   const events = stateToEvents(state.chatHistory, state.taskWorkspace);
 
   // Generate a mock bid to satisfy the interface (Orchestrator already chose it)
-  const bid: AgentBid = { agentName: agent.name, confidence: 1.0, proposedAction: 'Execute from Graph workflow', expectedOutputShape: 'text' };
+  const bid: AgentBid = { agentName: agent.name as any, confidence: 1.0, proposedAction: 'Execute from Graph workflow', expectedOutputShape: 'text' };
 
   // Inject pseudo-vector context for CodeAgent
   if (state.activeAgent === 'code_agent') {
@@ -332,6 +380,38 @@ async function specialistNode(state: typeof AuraStateSchema.State) {
       errorCount: 0 // Reset circuit breaker on success
     };
   } catch (err: any) {
+    // Check if this is a Veto approval needed error
+    if (err instanceof VetoApprovalNeededError && state.sessionId) {
+      console.log(`[Graph] ⚠️ Veto approval needed for action:`, err.action.toolName);
+      
+      // Call LangGraph's interrupt() to pause the workflow
+      // This will return control to the client with the approval request
+      const interruptValue = interrupt({
+        type: 'approval_required',
+        action: err.action,
+        message: `Action "${err.action.toolName}" requires approval`,
+        sessionId: state.sessionId,
+      });
+      
+      console.log(`[Graph] Workflow resumed after interrupt with:`, interruptValue);
+      
+      // When resumed, interruptValue will contain the approved tool arguments
+      // We need to re-execute the tool with the approved args
+      if (interruptValue && typeof interruptValue === 'object') {
+        const approvedArgs = (interruptValue as any).approvedArgs || (interruptValue as any).resume;
+        if (approvedArgs) {
+          console.log(`[Graph] Re-executing tool with approved args:`, approvedArgs);
+          // The tool registry should handle the re-execution
+          // For now, just log and continue
+        }
+      }
+      
+      return {
+        taskWorkspace: state.taskWorkspace,
+        errorCount: 0
+      };
+    }
+    
     console.error(`[Graph] ⚠️ ${state.activeAgent} threw an error:`, err.message);
     
     // Broadcast error to debug WebSocket
@@ -497,4 +577,4 @@ workflow.addEdge('compaction', END); // Compaction is the new terminal node
 // sessions (orchestrate_sessions + blackboard_events) for durable session resume.
 // Uses the same better-sqlite3 db instance as the rest of the application.
 export const checkpointer = new SqliteSaver(db);
-export const compiledGraph = workflow.compile({ checkpointer });
+export const compiledGraph = workflow.compile({ checkpointer })

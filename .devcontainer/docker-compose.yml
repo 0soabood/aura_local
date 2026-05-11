@@ -1,0 +1,36 @@
+version: '3.8'
+services:
+  # Development container service - extends the main aura-dev service
+  aura-dev:
+    # Override the command to keep container running for VS Code
+    command: sleep infinity
+
+    volumes:
+      # Mount the entire project folder for VS Code workspace
+      - ..:/workspaces:cached
+      # Preserve node_modules from the container
+      - /app/node_modules
+      # Mount Docker socket for Docker-in-Docker (if needed)
+      # - /var/run/docker.sock:/var/run/docker.sock
+
+    # Environment overrides for dev container
+    environment:
+      - NODE_ENV=development
+      - RUNNING_IN_DOCKER=true
+      - DISABLE_HMR=false
+      # Override DB path for dev container workspace
+      - AURA_DB_PATH=/workspaces/${localWorkspaceFolderBasename}/data/aura.db
+
+    # Additional capabilities for debugging
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined
+
+    # Ensure the container stays running
+    restart: unless-stopped
+
+    # Override healthcheck for dev container (more lenient)
+    healthcheck:
+      disable: true
+ 

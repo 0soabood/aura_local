@@ -144,14 +144,11 @@ export const aura: AuraAPI = {
 
   // Provider & Model info
   getActiveProvider: async () => {
-    const res = await fetch('/api/settings');
-    if (!res.ok) return 'groq';
-    const data = await res.json();
-    return data.activeProvider || 'groq';
+    return 'openrouter';
   },
 
   getAvailableModels: async () => {
-    const res = await fetch('/api/settings');
+    const res = await fetch('/api/models');
     if (!res.ok) return null;
     return res.json();
   },
@@ -249,19 +246,32 @@ export const aura: AuraAPI = {
 
   getStatsV2: async (): Promise<TelemetryMetricsV2> => {
     try {
-      const res = await fetch('/api/stats');
+      const res = await fetch('/api/stats-v2');
+      if (!res.ok) throw new Error('Failed to fetch stats-v2');
       const raw = await res.json();
-      // Map old TelemetryMetrics shape to V2 shape with sensible defaults
       return {
-        total_routes: raw.tasksCompleted ?? 0,
-        avg_latency_ms: raw.executionVelocity ? raw.executionVelocity * 200 : 1840,
-        success_rate: raw.systemHealth ? raw.systemHealth / 100 : 0.942,
-        est_token_cost_usd: raw.totalValueSignal ? raw.totalValueSignal * 0.05 : 48.21,
-        hourly_latency_ms: raw.hourly_latency_ms ?? Array.from({ length: 24 }, () => 1500 + Math.random() * 1000),
-        spend_series_usd: raw.spend_series_usd ?? Array.from({ length: 7 }, (_, i) => 6 + i * 1.2),
+        total_routes: raw.total_routes ?? 0,
+        avg_latency_ms: raw.avg_latency_ms ?? 0,
+        success_rate: raw.success_rate ?? 0,
+        est_token_cost_usd: raw.est_token_cost_usd ?? 0,
+        route_count_series: raw.route_count_series ?? Array(24).fill(0),
+        hourly_latency_ms: raw.hourly_latency_ms ?? Array(24).fill(0),
+        success_rate_series: raw.success_rate_series ?? Array(24).fill(0),
+        spend_series_usd: raw.spend_series_usd ?? Array(7).fill(0),
+        top_consumers: raw.top_consumers ?? [],
       };
     } catch {
-      return { total_routes: 0, avg_latency_ms: 0, success_rate: 0, est_token_cost_usd: 0, hourly_latency_ms: [], spend_series_usd: [] };
+      return {
+        total_routes: 0,
+        avg_latency_ms: 0,
+        success_rate: 0,
+        est_token_cost_usd: 0,
+        route_count_series: [],
+        hourly_latency_ms: [],
+        success_rate_series: [],
+        spend_series_usd: [],
+        top_consumers: [],
+      };
     }
   },
 
@@ -274,6 +284,7 @@ export const aura: AuraAPI = {
         id: s.id,
         name: s.title,
         created_at: s.created_at,
+        updated_at: s.updated_at,
         state: 'done' as const,
         token_count: 0,
         model: 'claude',

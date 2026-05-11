@@ -7,7 +7,8 @@ import { writeFileDef, writeFileFn } from '../tools/builtin/write_file';
 import { editFileDef, editFileFn } from '../tools/builtin/edit_file';
 import { runCommandDef, runCommandFn } from '../tools/builtin/run_command';
 import { ToolRegistry } from '../tools/registry';
-import { peekFallbackChain, resolveModel } from '../ModelConfig';
+import { peekFallbackChain } from '../ModelConfig';
+import { resolveModel } from '../ModelConfig.server';
 import { buildCodePrompt } from '../prompts/AgentWiring';
 
 const CODE_RE =
@@ -117,7 +118,7 @@ export class CodeAgent extends BaseAgent {
 
     const messages = this.buildMessages(events, SYSTEM_PROMPT);
 
-    let model = resolveModel('daily_driver');
+    let model = bid.preferredModel || resolveModel('daily_driver');
     if (!this.isProviderHealthy(model)) model = this.getHealthyModel() as string;
 
     if (!model) {

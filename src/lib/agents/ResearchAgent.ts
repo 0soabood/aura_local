@@ -3,7 +3,8 @@ import { BaseAgent } from './types';
 import { readFileDef, readFileFn } from '../tools/builtin/read_file';
 import { listDirectoryDef, listDirectoryFn } from '../tools/builtin/list_directory';
 import { ToolRegistry } from '../tools/registry';
-import { peekFallbackChain, resolveModel } from '../ModelConfig';
+import { peekFallbackChain } from '../ModelConfig';
+import { resolveModel } from '../ModelConfig.server';
 import { buildResearchPrompt } from '../prompts/AgentWiring';
 
 const RESEARCH_RE =
@@ -73,7 +74,7 @@ export class ResearchAgent extends BaseAgent {
     const messages = this.buildMessages(events, SYSTEM_PROMPT);
     const reg = this.buildResearchToolRegistry();
 
-    let model = resolveModel('long_context');
+    let model = bid.preferredModel || resolveModel('long_context');
     if (!this.isProviderHealthy(model)) model = this.getHealthyModel() as string;
 
     const reactResult = await this.runReactLoop(

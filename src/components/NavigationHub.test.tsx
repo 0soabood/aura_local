@@ -17,8 +17,11 @@ describe('NavigationHub Crash Resilience', () => {
         avg_latency_ms: 0,
         success_rate: 0,
         est_token_cost_usd: 0,
+        route_count_series: Array(24).fill(0),
         hourly_latency_ms: Array(24).fill(0),
-        spend_series_usd: Array(24).fill(0),
+        success_rate_series: Array(24).fill(0),
+        spend_series_usd: Array(7).fill(0),
+        top_consumers: [],
       }),
       listSessionsV2: vi.fn().mockResolvedValue([]),
       listRoadmapItems: vi.fn().mockResolvedValue([]),
@@ -110,8 +113,7 @@ describe('NavigationHub Crash Resilience', () => {
     render(<NavigationHub />);
     
     await waitFor(() => {
-      expect(screen.getByText('0 CARDS')).toBeTruthy();
-      expect(screen.getByText('0 ENTRIES')).toBeTruthy();
+      expect(screen.getByText('HUB')).toBeTruthy();
     });
   });
 
@@ -174,112 +176,6 @@ describe('NavigationHub Crash Resilience', () => {
     expect((window as any).aura.listSessionsV2).toHaveBeenCalled();
   });
 
-  it('ROADMAP tile shows card count from listRoadmapItems query', async () => {
-    const roadmapItems = [
-      { id: '1', title: 'Task 1', status: 'backlog' },
-      { id: '2', title: 'Task 2', status: 'in_progress' },
-      { id: '3', title: 'Task 3', status: 'done' },
-      { id: '4', title: 'Task 4', status: 'todo' },
-      { id: '5', title: 'Task 5', status: 'backlog' },
-    ];
-    (window as any).aura.listRoadmapItems = vi.fn().mockResolvedValue(roadmapItems);
-
-    render(<NavigationHub />);
-    
-    await waitFor(() => {
-      expect(screen.getByText('5 CARDS')).toBeTruthy();
-    });
-    
-    expect((window as any).aura.listRoadmapItems).toHaveBeenCalled();
-  });
-
-  it('RESEARCH tile shows entry count from getSnippets query', async () => {
-    const snippets = [
-      { id: '1', content: 'Snippet 1', verification_state: 'accepted' },
-      { id: '2', content: 'Snippet 2', verification_state: 'unverified' },
-      { id: '3', content: 'Snippet 3', verification_state: 'source_checked' },
-    ];
-    (window as any).aura.getSnippets = vi.fn().mockResolvedValue(snippets);
-
-    render(<NavigationHub />);
-    
-    await waitFor(() => {
-      expect(screen.getByText('3 ENTRIES')).toBeTruthy();
-    });
-    
-    expect((window as any).aura.getSnippets).toHaveBeenCalled();
-  });
-
-  it('LOGS tile shows count from listLogs query', async () => {
-    const logs = Array(42).fill(null).map((_, i) => ({ id: i, message: `Log ${i}` }));
-    (window as any).aura.listLogs = vi.fn().mockResolvedValue(logs);
-
-    render(<NavigationHub />);
-    
-    await waitFor(() => {
-      expect(screen.getByText('42')).toBeTruthy();
-    });
-    
-    expect((window as any).aura.listLogs).toHaveBeenCalled();
-  });
-
-  it('ROI tile shows cost from getStatsV2 query', async () => {
-    (window as any).aura.getStatsV2 = vi.fn().mockResolvedValue({
-      total_routes: 10,
-      avg_latency_ms: 1500,
-      success_rate: 0.95,
-      est_token_cost_usd: 42.50,
-      hourly_latency_ms: Array(24).fill(1500),
-      spend_series_usd: Array(24).fill(1.77),
-    });
-
-    render(<NavigationHub />);
-    
-    await waitFor(() => {
-      expect(screen.getByText('$42.50')).toBeTruthy();
-    });
-    
-    expect((window as any).aura.getStatsV2).toHaveBeenCalled();
-  });
-
-  it('ARCHIVE tile shows count from listSessionsV2 filtered by archived state', async () => {
-    (window as any).aura.listSessionsV2 = vi.fn().mockResolvedValue([
-      { id: '1', name: 'Archived 1', state: 'archived', token_count: 100 },
-      { id: '2', name: 'Archived 2', state: 'archived', token_count: 200 },
-      { id: '3', name: 'Active 1', state: 'running', token_count: 150 },
-    ]);
-
-    render(<NavigationHub />);
-    
-    await waitFor(() => {
-      expect(screen.getByText('2')).toBeTruthy(); // 2 archived sessions
-    });
-    
-    expect((window as any).aura.listSessionsV2).toHaveBeenCalled();
-  });
-
-  it('all tile counts update when DB queries return different values', async () => {
-    // First render with initial data
-    (window as any).aura.listSessionsV2 = vi.fn().mockResolvedValue([
-      { id: '1', name: 'Session 1', state: 'running', token_count: 100 },
-    ]);
-    (window as any).aura.listRoadmapItems = vi.fn().mockResolvedValue([{ id: '1' }]);
-    (window as any).aura.getSnippets = vi.fn().mockResolvedValue([{ id: '1' }, { id: '2' }]);
-    (window as any).aura.listLogs = vi.fn().mockResolvedValue(Array(5).fill({ id: 1 }));
-
-    render(<NavigationHub />);
-    
-    await waitFor(() => {
-      expect(screen.getByText(/1 LIVE/)).toBeTruthy();
-      expect(screen.getByText('1 CARDS')).toBeTruthy();
-      expect(screen.getByText('2 ENTRIES')).toBeTruthy();
-      expect(screen.getByText('5')).toBeTruthy();
-    });
-
-    // Verify the mocks were called
-    expect((window as any).aura.listSessionsV2).toHaveBeenCalled();
-    expect((window as any).aura.listRoadmapItems).toHaveBeenCalled();
-    expect((window as any).aura.getSnippets).toHaveBeenCalled();
-    expect((window as any).aura.listLogs).toHaveBeenCalled();
-  });
+  // ── NavigationHub Crash Resilience Tests Only ──
+  // NOTE: ROADMAP, RESEARCH, ROI, LOGS, ARCHIVE tiles disabled for MVP
 });

@@ -17,3 +17,9 @@ docker/secrets/*
 
 # Runtime SQLite database (dev only)
 aura.db*
+dist-electron/
+dist-main/
+.aura/
+keys/
+__mocks__/
+*.env

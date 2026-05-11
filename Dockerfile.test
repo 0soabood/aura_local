@@ -1,0 +1,29 @@
+# Dockerfile for running tests - all deps and source inside
+FROM node:22-alpine
+
+WORKDIR /app/
+
+# Install build tools for native modules if needed
+RUN apk add --no-cache python3 make g++ py3-setuptools
+
+# Copy package files first for better layer caching
+COPY package*.json ./
+
+# Install dependencies (skip postinstall to avoid electron-rebuild)
+RUN npm install --ignore-scripts
+
+# Rebuild better-sqlite3 for Linux if present
+RUN if [ -d "node_modules/better-sqlite3" ]; then npm rebuild better-sqlite3; fi
+
+# Copy all source files
+COPY . .
+
+# Set test environment
+ENV NODE_ENV=test
+ENV AURA_DB_PATH=/app/data/test-aura.db
+
+# Create data directory
+RUN mkdir -p /app/data/
+
+# Default command
+CMD ["npx", "vitest", "run"]

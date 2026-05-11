@@ -13,6 +13,7 @@
 - One owning layer per bug fix.
 - One shared helper for cross-cutting logic.
 - Keep old behavior unless change is intentional.
+- MVP CI requirement: The app must always remain buildable (`npm run build` & `npm run build:electron`). Do not commit code with broken TS imports or missing types.
 
 ## Validation
 - Every meaningful change must include:

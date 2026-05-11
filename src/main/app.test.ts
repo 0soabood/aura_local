@@ -263,6 +263,50 @@ describe('Telemetry API', () => {
     expect(typeof res.body.systemHealth).toBe('number');
     expect(Array.isArray(res.body.recentActivity)).toBe(true);
   });
+
+  it('GET /api/stats-v2 returns live route, success, latency, and spend series', async () => {
+    await request(app).post('/api/model-runs').send({
+      model_id: 'm1',
+      prompt: 'prompt 1',
+      status: 'completed',
+    });
+    const firstRunId = (await request(app).get('/api/model-runs')).body[0].id;
+    await request(app).patch(`/api/model-runs/${firstRunId}`).send({
+      status: 'completed',
+      latency_ms: 1200,
+      response: 'ok',
+    });
+
+    await request(app).post('/api/model-runs').send({
+      model_id: 'm2',
+      prompt: 'prompt 2',
+      status: 'failed',
+    });
+
+    await request(app).post('/api/roi-events').send({
+      type: 'expense',
+      amount: -12.5,
+      currency: 'USD',
+      source: 'OpenAI',
+      description: 'Token spend',
+    });
+
+    const res = await request(app).get('/api/stats-v2');
+    expect(res.status).toBe(200);
+    expect(res.body.total_routes).toBe(2);
+    expect(res.body.est_token_cost_usd).toBe(12.5);
+    expect(Array.isArray(res.body.route_count_series)).toBe(true);
+    expect(Array.isArray(res.body.hourly_latency_ms)).toBe(true);
+    expect(Array.isArray(res.body.success_rate_series)).toBe(true);
+    expect(Array.isArray(res.body.spend_series_usd)).toBe(true);
+    expect(res.body.route_count_series).toHaveLength(24);
+    expect(res.body.hourly_latency_ms).toHaveLength(24);
+    expect(res.body.success_rate_series).toHaveLength(24);
+    expect(res.body.spend_series_usd).toHaveLength(7);
+    expect(res.body.route_count_series.some((value: number) => value > 0)).toBe(true);
+    expect(res.body.success_rate_series.some((value: number) => value > 0)).toBe(true);
+    expect(res.body.spend_series_usd.some((value: number) => value > 0)).toBe(true);
+  });
 });
 
 describe('Process resilience', () => {

@@ -70,9 +70,6 @@ vi.mock('./providers/ProviderRegistry', () => {
   };
 });
 
-vi.mock('./providers/GeminiProvider',     () => ({ GeminiProvider:     vi.fn() }));
-vi.mock('./providers/GroqProvider',       () => ({ GroqProvider:       vi.fn() }));
-vi.mock('./providers/CodexCliProvider',   () => ({ CodexCliProvider:   vi.fn() }));
 vi.mock('./Blackboard', () => ({
   Blackboard: vi.fn().mockImplementation(function () {
     return {

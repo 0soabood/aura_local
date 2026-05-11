@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { createBrowserRouter, RouterProvider, Navigate } from 'react-router-dom';
+import { createBrowserRouter, RouterProvider } from 'react-router-dom';
 
 import './index.css'; // Import Tailwind CSS
 
@@ -10,10 +10,9 @@ import { ChatPage } from './components/ChatPage';
 import { RoadmapPage } from './components/RoadmapPage';
 import CoreTerminal from './components/CoreTerminal';
 import ROIDash from './components/ROIDash';
+import ResearchConsole from './components/ResearchConsole';
 import SystemLogs from './components/SystemLogs';
 
-// Debug: Check if window.aura is available
-console.log('[main.tsx] window.aura available:', !!(window as any).aura);
 if (!(window as any).aura) {
   console.error('[main.tsx] ERROR: window.aura is not defined! Preload script may have failed.');
 }
@@ -30,7 +29,7 @@ const router = createBrowserRouter([
       { path: 'roadmap', element: <RoadmapPage /> },
       { path: 'dash', element: <ROIDash /> },
       { path: 'logs', element: <SystemLogs /> },
-      { path: 'research', element: <div className="p-6 text-gray-400">Research console coming soon...</div> },
+      { path: 'research', element: <ResearchConsole /> },
     ],
   },
 ]);

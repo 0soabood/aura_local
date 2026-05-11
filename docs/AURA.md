@@ -12,6 +12,7 @@
 - **UI Refactor**: ✅ Complete (migrated from Tailwind classes to neubrutalist inline styles with CSS variables)
 - **Electron Fix**: ✅ Rebuilt `better-sqlite3` native module for Electron
 - **Build**: ✅ Passing (`npm run build` succeeds)
+- **CI/Build Contract**: ✅ Added rule to ensure MVP is always buildable and CI-able going forward
 - **Recharts**: ✅ Removed from dependencies (saved ~200KB)
 
 ### 🔄 In Progress  

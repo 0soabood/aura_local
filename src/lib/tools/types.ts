@@ -1,5 +1,13 @@
 export type ToolFn = (args: Record<string, unknown>) => Promise<string>;
 
+export interface ToolProperty {
+  type: string;
+  description?: string;
+  enum?: string[];
+  items?: ToolProperty;
+  properties?: Record<string, ToolProperty>;
+}
+
 export interface ToolDefinition {
   type: 'function';
   function: {
@@ -7,7 +15,7 @@ export interface ToolDefinition {
     description: string;
     parameters: {
       type: 'object';
-      properties: Record<string, { type: string; description: string }>;
+      properties: Record<string, ToolProperty>;
       required?: string[];
       additionalProperties?: boolean;
     };

@@ -5,7 +5,8 @@ import { writeFileDef, writeFileFn } from '../tools/builtin/write_file';
 import { editFileDef, editFileFn } from '../tools/builtin/edit_file';
 import { runCommandDef, runCommandFn } from '../tools/builtin/run_command';
 import { ToolRegistry } from '../tools/registry';
-import { peekFallbackChain, resolveModel } from '../ModelConfig';
+import { peekFallbackChain } from '../ModelConfig';
+import { resolveModel } from '../ModelConfig.server';
 import { buildSynthesisPrompt } from '../prompts/AgentWiring';
 
 /**
@@ -164,6 +165,6 @@ export class SynthesisAgent extends BaseAgent {
   }
 
   private bid(confidence: number, proposedAction: string): AgentBid {
-    return { agentName: 'synthesis_agent', confidence, proposedAction, expectedOutputShape: 'text' };
+    return { agentName: 'synthesis_agent', confidence, proposedAction, expectedOutputShape: 'markdown_report' };
   }
 }

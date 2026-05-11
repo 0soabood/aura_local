@@ -1,213 +1,108 @@
-# AURA Local Sync - Debugging Handoff (2026-05-02)
-
-## 🎯 Current Status: UI Loading Issues Resolved (Partial)
-
-The Electron app now loads successfully, but there may still be runtime issues in the renderer process.
+# AURA — Debugging Handoff
+**Last updated: 2026-05-09**
 
 ---
 
-## ✅ What Was Fixed
+## Current Status
 
-### 1. **better-sqlite3 Bundling Issue** 
-**Problem**: `better-sqlite3` native module was being bundled into the browser build, causing `promisify is not a function` error.
+MVP recovery in progress. Server starts and fetches 367 OpenRouter models. Core loop (CoreTerminal → /api/orchestrate → LangGraph → response) is not yet producing a response due to 401 from OpenRouter.
 
-**Solution**: Added `better-sqlite3` and `electron` to Vite's `build.rollupOptions.external` in `vite.config.ts`:
-```typescript
-build: {
-  rollupOptions: {
-    external: ['better-sqlite3', 'electron'],
-  },
-}
+---
+
+## What Works
+
+- `npm run dev` starts cleanly (Express on 3000, Vite middleware)
+- OpenRouter key is valid — 367 models fetched on startup
+- TypeScript compiles with zero errors (`npx tsc --noEmit`)
+- LangGraph workflow compiles and mounts correctly
+- SQLite schema runs idempotent migrations on boot
+- CoreTerminal searchable model picker implemented (replaces native select)
+- All 7 truncated agent files repaired (BureaucracyAgent, ResearchAgent, SupervisorAgent, SynthesisAgent, CodeAgent, EtsyAgent, FundingAgent)
+- `src/lib/graph/workflow.ts` export fixed (`compiledGraph` not `compiledGr`)
+- `ReactiveOrchestrator.ts` fixed (sessionId/message narrowing)
+- `app.ts` fixed (VetoManager uses `updateConfig()` not direct property access)
+- `.env.local` null bytes stripped — file is clean
+
+## What Is Broken
+
+| Issue | Cause | Fix |
+|-------|-------|-----|
+| POST /api/orchestrate → 401 | Model roles defaulted to paid models | ModelConfig.ts updated to free-tier models. Restart server. |
+| Model picker shows 3 models instead of 367 | Frontend fetched /api/models before init completed | Reload page after server logs "Updated OpenRouter with 367 models" |
+| Settings panel doesn't open | Unknown — low priority | Investigate after core loop works |
+| ResearchAgent/CodeAgent ignore model picker | Both call resolveModel() directly | Task 6 in GEMINI.md |
+
+---
+
+## Active Runtime Path
+
+```
+POST /api/orchestrate
+  → src/main/app.ts (line ~430)
+  → compiledGraph.stream() or compiledGraph.invoke()
+  → src/lib/graph/workflow.ts
+  → orchestratorNode → agentNode → synthesisNode
+  → SSE stream back to CoreTerminal
 ```
 
-### 2. **Preload Script Module Format**
-**Problem**: Preload script was compiled as ES modules (`"module": "ESNext"`), but Electron expects CommonJS.
-
-**Solution**: Changed `tsconfig.electron.json` to use `"module": "ESNext"` with `"moduleResolution": "Bundler"` (for Vite compatibility) and ensured proper ES module output.
-
-### 3. **IPC Bridge Implementation**
-**Problem**: React components were using direct `fetch()` calls instead of the IPC bridge, causing CORS issues.
-
-**Fixes**:
-- Fixed `src/preload/index.ts` to properly use `contextBridge.exposeInMainWorld('aura', aura)`
-- Fixed `src/components/useChatStream.tsx` to use `window.aura.streamOrchestrate()` instead of direct `fetch()`
-- Added `getAura()` helper function for safe access to `window.aura`
-
-### 4. **QuotaTracker Import Chain**
-**Problem**: `ModelConfig.ts` imported `QuotaTracker.ts` which imported `db/connection.ts` (better-sqlite3).
-
-**Solution**: 
-- Removed `quotaTracker` import from `ModelConfig.ts`
-- Created `ModelConfig.server.ts` for Node.js-only usage with `quotaTracker`
-
-### 5. **Electron Startup Configuration**
-**Problem**: Multiple issues with running TypeScript directly in Electron.
-
-**Solution**: Updated `package.json` scripts:
-```json
-"start:electron": "npm run build:electron && cross-env NODE_ENV=production NODE_OPTIONS=\"--import=tsx/esm\" electron dist-electron/main/index.js"
-```
+ReactiveOrchestrator is NOT in this path. Do not trace through it.
 
 ---
 
-## 🔧 Current Configuration
+## Key File Locations
 
-### Key Files Modified:
-1. **`vite.config.ts`** - Added `build.rollupOptions.external` to exclude native modules
-2. **`tsconfig.electron.json`** - Set to `"module": "ESNext"` for ESM output
-3. **`src/preload/index.ts`** - Fixed IPC bridge implementation
-4. **`src/components/useChatStream.tsx`** - Now uses `window.aura` IPC bridge
-5. **`src/lib/ModelConfig.ts`** - Removed server-side imports
-6. **`src/lib/ModelConfig.server.ts`** - New file for Node.js-only code
-7. **`package.json`** - Updated scripts for proper Electron startup
-
-### Build Process:
-```bash
-# Production build
-npm run build  # Vite build (excludes better-sqlite3 from browser bundle)
-
-# Electron build
-npm run build:electron  # TypeScript compilation with ESM output
-
-# Start Electron
-npm run start:electron  # Uses tsx/esm to run compiled ESM files
-```
+| What | Where |
+|------|-------|
+| API key | `.env.local` |
+| Model roles | `src/lib/ModelConfig.ts` |
+| LangGraph workflow | `src/lib/graph/workflow.ts` |
+| Express routes | `src/main/app.ts` |
+| Provider call chain | `src/lib/providers/UnifiedCaller.ts` |
+| OpenRouter config | `src/lib/providers/OpenRouterProvider.ts` |
+| CoreTerminal UI | `src/components/CoreTerminal.tsx` |
+| Zustand store | `src/stores/auraStore.ts` + `src/stores/useAura.ts` |
 
 ---
 
-## 🐛 Known Issues & Debugging Notes
+## How to Test the Core Loop
 
-### 1. **Non-minified Build for Debugging**
-Currently `vite.config.ts` has `build.minify: false` for debugging. Revert to `true` for production.
+1. `npm run dev`
+2. Wait for `[ProviderRegistry] Updated OpenRouter with 367 models`
+3. Open http://localhost:3000
+4. Type a message, press Enter
+5. Watch terminal for `[API] LangGraph execution completed`
+6. Watch browser for streamed response text
 
-### 2. **DevTools Auto-Open**
-`src/main/index.ts` has `mainWindow.webContents.openDevTools()` enabled. Remove for production.
-
-### 3. **Console Logging**
-Multiple `console.log` statements added for debugging:
-- `[AURA MAIN] Page loaded successfully`
-- `[main.tsx] window.aura available: true/false`
-- Various IPC bridge logs
-
-### 4. **OpenRouter Model Fetch**
-- Fetches 371 models from `https://openrouter.ai/api/v1/models`
-- Updates ProviderRegistry asynchronously
-- Initial 4 models loaded from hardcoded list, then updated to 371
+If you get 401: see GEMINI.md → "Debugging 401" section.
 
 ---
 
-## 📋 Debugging Checklist for Next Team
-
-### If UI Still Blank:
-1. **Check DevTools Console** (F12 or Ctrl+Shift+I in Electron window)
-   - Look for errors in red
-   - Verify `window.aura` is defined: type `window.aura` in console
-
-2. **Check Main Process Logs** (terminal running `npm run start:electron`)
-   - Should see: `[AURA MAIN] Process running at http://localhost:3000`
-   - Should see: `[AURA MAIN] Page loaded successfully`
-
-3. **Verify API Server is Running**
-   ```bash
-   Invoke-WebRequest -Uri http://localhost:3000/ -UseBasicParsing
-   ```
-   Should return HTML with `<!DOCTYPE html>`
-
-4. **Test IPC Bridge**
-   In DevTools console:
-   ```javascript
-   window.aura.checkHealth().then(console.log)
-   ```
-   Should return `{ status: 'ok', providers: {...} }`
-
-5. **Check for better-sqlite3 in Bundle**
-   ```bash
-   Select-String -Path "dist/assets/index-*.js" -Pattern "better-sqlite3"
-   ```
-   Should return no matches.
-
----
-
-## 🚀 Next Steps
-
-### Immediate Priorities:
-1. **Test UI Functionality**
-   - [ ] Verify sidebar navigation works
-   - [ ] Test chat functionality (send a message)
-   - [ ] Check model selection dropdown
-   - [ ] Verify settings panel opens
-
-2. **Clean Up Debug Code**
-   - [ ] Remove `build.minify: false` from `vite.config.ts`
-   - [ ] Remove `openDevTools()` from `src/main/index.ts`
-   - [ ] Remove excessive `console.log` statements
-   - [ ] Re-enable minification for production
-
-3. **Test Modular Model Selection**
-   - [ ] Verify per-role model config works
-   - [ ] Test per-agent model overrides
-   - [ ] Check OpenRouter dynamic model list (371 models)
-   - [ ] Test model badges on messages (🤖)
-
-4. **Run Tests**
-   ```bash
-   npm run test
-   ```
-   Note: Tests may fail due to better-sqlite3 native module. Use Docker workaround:
-   ```bash
-   docker compose run --rm aura-test npx vitest run
-   ```
-
----
-
-## 📦 Environment Info
-
-- **OS**: Windows 11
-- **Node.js**: v24.15.0
-- **Electron**: (check `node_modules/electron/package.json`)
-- **Better-sqlite3**: v12.9.0 (native module rebuilt for Electron)
-- **Package Manager**: npm
-- **TypeScript**: Compiled with `tsc` (ESM output)
-
----
-
-## 🔗 Useful Commands
+## Build Commands
 
 ```bash
-# Development
-npm run dev              # Vite dev server only
-npm run start:electron    # Full Electron app
+# Run app (MVP mode)
+npm run dev
 
-# Build
-npm run build            # Vite production build
-npm run build:electron   # TypeScript compilation
+# Type check
+npx tsc --noEmit
 
-# Debug
-npm run start:electron   # Check terminal for main process logs
-# Press F12 in Electron window for DevTools
+# Run tests
+npm test
 
-# Docker (for tests)
-docker compose up -d      # Start all services
-docker compose logs -f    # View logs
-
-# Rebuild native modules
-npm run rebuild          # Rebuild better-sqlite3 for Electron
+# Run tests via Docker (if better-sqlite3 ABI fails)
+docker compose run --rm aura-test npx vitest run
 ```
 
----
-
-## 📝 Summary
-
-The AURA Local Sync app should now load in Electron. The main issues were:
-1. Native Node.js modules being bundled in browser build (fixed with Vite `external`)
-2. ES module format issues in preload script (fixed with proper TypeScript config)
-3. Direct fetch calls instead of IPC bridge (fixed in React components)
-
-**Current State**: Electron window opens, page loads, DevTools available for debugging.
-
-**Handoff to Debugging Team**: Please test all UI functionality, clean up debug code, and prepare for production build.
+Do NOT run:
+- `npm run start:electron` — ABI mismatch, Electron shelved for MVP
+- `npm run build:electron` — not needed
 
 ---
 
-*Last Updated: 2026-05-02*
-*By: GitHub Copilot*
+## Environment
+
+- OS: Windows 11
+- Node.js: v24 (ABI 137)
+- Electron: shelved (requires ABI 145 for better-sqlite3)
+- better-sqlite3: v12.9.0 (works with system Node for dev server only)
+- OpenRouter: 367 models available, key confirmed valid

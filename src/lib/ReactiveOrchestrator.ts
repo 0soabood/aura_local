@@ -126,7 +126,8 @@ export class ReactiveOrchestrator {
       return this.runGraph(task);
     }
 
-    const { sessionId, message } = task;
+    const sessionId: string = task.sessionId ?? `session-${Date.now()}`;
+    const message: string = task.message ?? '';
     const start = Date.now();
     let loops = 0;
     let terminationReason: OrchestratorTermination = 'max_loops';
@@ -374,7 +375,8 @@ export class ReactiveOrchestrator {
   }
 
   private async runGraph(task: OrchestratorTask): Promise<OrchestratorResult> {
-    const { sessionId, message } = task;
+    const sessionId: string = task.sessionId ?? `session-${Date.now()}`;
+    const message: string = task.message ?? '';
     const start = Date.now();
 
     // Seed the legacy ledger

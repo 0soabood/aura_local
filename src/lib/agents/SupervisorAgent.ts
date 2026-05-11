@@ -1,7 +1,8 @@
 import { AgentBid, AgentOutput, BlackboardEvent } from '../../shared/types';
 import { BaseAgent } from './types';
 import { buildSupervisorPrompt } from '../prompts/AgentWiring';
-import { resolveModel, peekFallbackChain } from '../ModelConfig';
+import { peekFallbackChain } from '../ModelConfig';
+import { resolveModel } from '../ModelConfig.server';
 
 export class SupervisorAgent extends BaseAgent {
   readonly name = 'supervisor_agent' as const;

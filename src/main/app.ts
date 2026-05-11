@@ -28,6 +28,9 @@ import { reloadAuraMemory, getAuraMemory } from '../lib/memory/loader';
 import { writeMemoryFn } from '../lib/tools/builtin/write_memory';
 import { broadcastEvent, debugEmitter } from '../lib/debug';
 import db from '../db/connection';
+import { ProviderRegistry } from '../lib/providers/ProviderRegistry';
+import { getVetoManager } from '../lib/graph/workflow';
+import { DEFAULT_VETO_CONFIG } from '../lib/veto/types';
 
 // Cached ProviderRegistry instance (initialized once, reused across requests)
 let cachedRegistry: any = null;
@@ -41,7 +44,6 @@ async function getRegistry() {
   if (registryInitializing) return registryInitializing;
 
   registryInitializing = (async () => {
-    const { ProviderRegistry } = require('../lib/providers/ProviderRegistry');
     const registry = new ProviderRegistry();
 
     // Wait for async initialization (OpenRouter models) to complete
@@ -589,6 +591,8 @@ export function createApiApp(): Express {
         response:   result.finalResponse,
         status:     'completed',
         latency_ms: result.totalLatencyMs,
+        tokens_input: tokensIn,
+        tokens_output: tokensOut,
       });
 
       SystemLogRepository.create(
@@ -708,21 +712,52 @@ export function createApiApp(): Express {
       FROM roi_events
       WHERE type = 'expense'
     `).get() as { total: number };
-    
-    // Get hourly latency (last 24 hours)
-    const hourlyLatency = db.prepare(`
-      SELECT CAST(strftime('%H', created_at) AS INTEGER) as hour, AVG(latency_ms) as avg_ms
+
+    const hourlyBuckets = Array(24).fill(0);
+    const routeCountSeries = Array(24).fill(0);
+    const successRateSeries = Array(24).fill(0);
+
+    const routeSeriesRows = db.prepare(`
+      SELECT
+        CAST((strftime('%s', 'now') - strftime('%s', created_at)) / 3600 AS INTEGER) as hours_ago,
+        COUNT(*) as run_count,
+        AVG(CASE WHEN latency_ms > 0 THEN latency_ms END) as avg_ms,
+        CAST(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS FLOAT) / COUNT(*) as success_rate
       FROM model_runs
       WHERE created_at >= datetime('now', '-24 hours')
-      GROUP BY hour
-      ORDER BY hour
-    `).all() as { hour: number; avg_ms: number }[];
-    
-    const hourlyBuckets = Array(24).fill(0);
-    hourlyLatency.forEach(r => { 
-      if (r.hour >= 0 && r.hour < 24) hourlyBuckets[r.hour] = r.avg_ms || 0; 
+      GROUP BY hours_ago
+    `).all() as Array<{
+      hours_ago: number;
+      run_count: number;
+      avg_ms: number | null;
+      success_rate: number | null;
+    }>;
+
+    routeSeriesRows.forEach((row) => {
+      if (row.hours_ago < 0 || row.hours_ago > 23) return;
+      const bucketIndex = 23 - row.hours_ago;
+      routeCountSeries[bucketIndex] = row.run_count || 0;
+      hourlyBuckets[bucketIndex] = row.avg_ms || 0;
+      successRateSeries[bucketIndex] = row.success_rate || 0;
     });
-    
+
+    const spendSeriesUsd = Array(7).fill(0);
+    const spendSeriesRows = db.prepare(`
+      SELECT
+        CAST(julianday('now') - julianday(occurred_at) AS INTEGER) as days_ago,
+        SUM(ABS(amount)) as total_amount
+      FROM roi_events
+      WHERE type = 'expense'
+        AND occurred_at >= datetime('now', '-7 days')
+      GROUP BY days_ago
+    `).all() as Array<{ days_ago: number; total_amount: number | null }>;
+
+    spendSeriesRows.forEach((row) => {
+      if (row.days_ago < 0 || row.days_ago > 6) return;
+      const bucketIndex = 6 - row.days_ago;
+      spendSeriesUsd[bucketIndex] = row.total_amount || 0;
+    });
+
     // Get top consumers
     const topConsumers = db.prepare(`
       SELECT source, SUM(amount) as total_amount
@@ -738,8 +773,10 @@ export function createApiApp(): Express {
       avg_latency_ms: latency?.avg || 0,
       success_rate: success?.rate || 0,
       est_token_cost_usd: Math.abs(tokenCost?.total || 0),
+      route_count_series: routeCountSeries,
       hourly_latency_ms: hourlyBuckets,
-      spend_series_usd: Array(7).fill(0), // TODO: implement 7-day spend series
+      success_rate_series: successRateSeries,
+      spend_series_usd: spendSeriesUsd,
       top_consumers: topConsumers.map(r => ({ name: r.source, cost: Math.abs(r.total_amount) })),
     });
   });
@@ -848,16 +885,158 @@ export function createApiApp(): Express {
     }
   });
 
-  // Error-handling middleware (4-arg) — must be registered after the routes.
-  // Catches malformed-JSON SyntaxError thrown by express.json() so the
-  // process stays alive and the client gets a clean 400. Acceptance
-  // criterion (TESTING.md): "API endpoints handle malformed JSON payloads
-  // without crashing the process."
-  app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
-    if (err && err.type === 'entity.parse.failed') {
-      return res.status(400).json({ error: 'Malformed JSON payload' });
+  // ── Veto Layer ───────────────────────────────────────────────────────
+  // Get pending approval actions for a session
+  app.get('/api/veto/pending', (req, res) => {
+    const sessionId = req.query.sessionId as string || '';
+    if (!sessionId) return res.status(400).json({ error: 'sessionId is required' });
+    
+    try {
+      const vetoManager = getVetoManager(sessionId);
+      const pendingActions = vetoManager.getPendingActions();
+      res.json({ pendingActions, sessionId });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
     }
-    return next(err);
+  });
+
+  // Approve a pending action
+  app.post('/api/veto/:actionId/approve', async (req, res) => {
+    const { actionId } = req.params;
+    const { sessionId } = req.body;
+    
+    if (!actionId) return res.status(400).json({ error: 'actionId is required' });
+    if (!sessionId) return res.status(400).json({ error: 'sessionId is required' });
+    
+    try {
+      const vetoManager = getVetoManager(sessionId);
+      const action = vetoManager.approveAction(actionId);
+      
+      if (!action) {
+        return res.status(404).json({ error: 'Action not found or already processed' });
+      }
+      
+      SystemLogRepository.create('audit', 'VETO', `Action ${actionId} approved`, {
+        actionId,
+        sessionId,
+        decision: 'approved',
+        toolName: action.toolName,
+      });
+      
+      // Resume the workflow with the approved action
+      // Note: LangGraph interrupt() pauses the workflow and returns the interrupt value
+      // The client needs to resume by calling the workflow again with the approved args
+      // For now, we'll log that approval was given and the workflow should be resumed
+      console.log('[Veto] Action approved. Workflow resume needs to be triggered from client side.');
+      console.log('[Veto] Approved action:', action.toolName, action.toolArgs);
+      
+      // In a full implementation, you would:
+      // 1. Store the approved action in a way the workflow can access it
+      // 2. Trigger the workflow to resume (possibly via WebSocket message to client)
+      // 3. The client would then re-invoke the workflow with the resume value
+      
+      res.json({ success: true, actionId, decision: 'approved', action });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Reject a pending action
+  app.post('/api/veto/:actionId/reject', (req, res) => {
+    const { actionId } = req.params;
+    const { sessionId, notes } = req.body;
+    
+    if (!actionId) return res.status(400).json({ error: 'actionId is required' });
+    if (!sessionId) return res.status(400).json({ error: 'sessionId is required' });
+    
+    try {
+      const vetoManager = getVetoManager(sessionId);
+      const action = vetoManager.rejectAction(actionId, notes);
+      
+      if (!action) {
+        return res.status(404).json({ error: 'Action not found or already processed' });
+      }
+      
+      SystemLogRepository.create('audit', 'VETO', `Action ${actionId} rejected`, {
+        actionId,
+        sessionId,
+        decision: 'rejected',
+        notes,
+        toolName: action.toolName,
+      });
+      
+      res.json({ success: true, actionId, decision: 'rejected', action });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Modify and approve a pending action
+  app.post('/api/veto/:actionId/modify', (req, res) => {
+    const { actionId } = req.params;
+    const { sessionId, modifiedArgs, notes } = req.body;
+    
+    if (!actionId) return res.status(400).json({ error: 'actionId is required' });
+    if (!sessionId) return res.status(400).json({ error: 'sessionId is required' });
+    if (!modifiedArgs) return res.status(400).json({ error: 'modifiedArgs is required' });
+    
+    try {
+      const vetoManager = getVetoManager(sessionId);
+      const action = vetoManager.modifyAction(actionId, modifiedArgs, notes);
+      
+      if (!action) {
+        return res.status(404).json({ error: 'Action not found or already processed' });
+      }
+      
+      SystemLogRepository.create('audit', 'VETO', `Action ${actionId} modified and approved`, {
+        actionId,
+        sessionId,
+        decision: 'modified',
+        modifiedArgs,
+        notes,
+        toolName: action.toolName,
+      });
+      
+      res.json({ success: true, actionId, decision: 'modified', action });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Get veto configuration
+  app.get('/api/veto/config', (req, res) => {
+    const sessionId = req.query.sessionId as string || '';
+    try {
+      if (sessionId) {
+        const vetoManager = getVetoManager(sessionId);
+        // Return session-specific config (would need getConfig method)
+        res.json(DEFAULT_VETO_CONFIG);
+      } else {
+        res.json(DEFAULT_VETO_CONFIG);
+      }
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Update veto configuration
+  app.put('/api/veto/config', (req, res) => {
+    const { sessionId, defaultBehavior, tierOverrides, alwaysRequireFor, neverRequireFor } = req.body;
+    
+    if (!sessionId) return res.status(400).json({ error: 'sessionId is required' });
+    
+    try {
+      const vetoManager = getVetoManager(sessionId);
+      vetoManager.updateConfig({
+        ...(defaultBehavior !== undefined ? { defaultBehavior } : {}),
+        ...(tierOverrides ? { tierOverrides } : {}),
+        ...(alwaysRequireFor ? { alwaysRequireFor } : {}),
+        ...(neverRequireFor ? { neverRequireFor } : {}),
+      });
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   return app;

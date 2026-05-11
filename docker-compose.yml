@@ -1,0 +1,129 @@
+# Docker Compose for AURA_LOCAL_SYNC
+# All dependencies are now inside Docker images
+# Source files are mounted for development with hot reload
+
+services:
+  # Development service - runs in web mode (no Electron GUI needed)
+  aura-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aura-local-sync:dev
+    container_name: aura-dev
+    ports:
+      - "3000:3000"    # Main application
+      - "24678:24678"   # HMR WebSocket
+    volumes:
+      # Mount source files for development (with hot reload)
+      # Note: node_modules is NOT mounted - uses Docker's node_modules
+      - ./src:/app/src:cached
+      - ./index.html:/app/index.html:cached
+      - ./package.json:/app/package.json:cached
+      - ./tsconfig.json:/app/tsconfig.json:cached
+      - ./tsconfig.electron.json:/app/tsconfig.electron.json:cached
+      - ./vite.config.ts:/app/vite.config.ts:cached
+      - ./postcss.config.js:/app/postcss.config.js:cached
+      - ./tailwind.config.js:/app/tailwind.config.js:cached
+      - ./data:/app/data:cached  # SQLite database persistence
+    environment:
+      - NODE_ENV=development
+      - AURA_DB_PATH=/app/data/aura.db
+      - RUNNING_IN_DOCKER=true
+      - VITE_HMR_HOST=0.0.0.0
+    secrets:
+      - GOOGLE_API_KEY
+      - GROQ_API_KEY
+      - OPENROUTER_API_KEY
+      - MISTRAL_API_KEY
+      - COHERE_API_KEY
+      - DEEPSEEK_API_KEY
+      - GOOGLE_CLOUD_PROJECT
+      - GOOGLE_CLOUD_LOCATION
+      - GOOGLE_APPLICATION_CREDENTIALS_JSON
+    # Read secrets and export as environment variables, then start app
+    command: sh -c "
+      export GOOGLE_API_KEY=$$(cat /run/secrets/GOOGLE_API_KEY) &&
+      export GROQ_API_KEY=$$(cat /run/secrets/GROQ_API_KEY) &&
+      export OPENROUTER_API_KEY=$$(cat /run/secrets/OPENROUTER_API_KEY) &&
+      export MISTRAL_API_KEY=$$(cat /run/secrets/MISTRAL_API_KEY) &&
+      export COHERE_API_KEY=$$(cat /run/secrets/COHERE_API_KEY) &&
+      export DEEPSEEK_API_KEY=$$(cat /run/secrets/DEEPSEEK_API_KEY) &&
+      export GOOGLE_CLOUD_PROJECT=$$(cat /run/secrets/GOOGLE_CLOUD_PROJECT) &&
+      export GOOGLE_CLOUD_LOCATION=$$(cat /run/secrets/GOOGLE_CLOUD_LOCATION) &&
+      cat /run/secrets/GOOGLE_APPLICATION_CREDENTIALS_JSON > /tmp/service-account.json &&
+      npm run start:docker
+      "
+    # Healthcheck to verify the app is running
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:3000 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Test service - runs vitest in headless mode
+  aura-test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    image: aura-local-sync:test
+    container_name: aura-test
+    volumes:
+      # Mount source files for testing
+      # Note: node_modules is NOT mounted - uses Docker's node_modules
+      - ./src:/app/src:cached
+      - ./tests:/app/tests:cached
+      - ./package.json:/app/package.json:cached
+      - ./tsconfig.json:/app/tsconfig.json:cached
+      - ./vite.config.ts:/app/vite.config.ts:cached
+      - ./vitest.config.ts:/app/vitest.config.ts:cached
+      - ./vitest.config.mjs:/app/vitest.config.mjs:cached
+    environment:
+      - NODE_ENV=test
+      - AURA_DB_PATH=/app/data/test-aura.db
+    secrets:
+      - GOOGLE_API_KEY
+      - GROQ_API_KEY
+      - OPENROUTER_API_KEY
+      - MISTRAL_API_KEY
+      - COHERE_API_KEY
+      - DEEPSEEK_API_KEY
+      - GOOGLE_CLOUD_PROJECT
+      - GOOGLE_CLOUD_LOCATION
+      - GOOGLE_APPLICATION_CREDENTIALS_JSON
+    # Read secrets and export as environment variables, then run tests
+    command: sh -c "
+      export GOOGLE_API_KEY=$$(cat /run/secrets/GOOGLE_API_KEY) &&
+      export GROQ_API_KEY=$$(cat /run/secrets/GROQ_API_KEY) &&
+      export OPENROUTER_API_KEY=$$(cat /run/secrets/OPENROUTER_API_KEY) &&
+      export MISTRAL_API_KEY=$$(cat /run/secrets/MISTRAL_API_KEY) &&
+      export COHERE_API_KEY=$$(cat /run/secrets/COHERE_API_KEY) &&
+      export DEEPSEEK_API_KEY=$$(cat /run/secrets/DEEPSEEK_API_KEY) &&
+      export GOOGLE_CLOUD_PROJECT=$$(cat /run/secrets/GOOGLE_CLOUD_PROJECT) &&
+      export GOOGLE_CLOUD_LOCATION=$$(cat /run/secrets/GOOGLE_CLOUD_LOCATION) &&
+      cat /run/secrets/GOOGLE_APPLICATION_CREDENTIALS_JSON > /tmp/service-account.json &&
+      npx vitest run
+      "
+    # Remove container after test run
+    restart: "no"
+
+# Top-level secrets definition
+secrets:
+  GOOGLE_API_KEY:
+    file: ./docker/secrets/GOOGLE_API_KEY
+  GROQ_API_KEY:
+    file: ./docker/secrets/GROQ_API_KEY
+  OPENROUTER_API_KEY:
+    file: ./docker/secrets/OPENROUTER_API_KEY
+  MISTRAL_API_KEY:
+    file: ./docker/secrets/MISTRAL_API_KEY
+  COHERE_API_KEY:
+    file: ./docker/secrets/COHERE_API_KEY
+  DEEPSEEK_API_KEY:
+    file: ./docker/secrets/DEEPSEEK_API_KEY
+  GOOGLE_CLOUD_PROJECT:
+    file: ./docker/secrets/GOOGLE_CLOUD_PROJECT
+  GOOGLE_CLOUD_LOCATION:
+    file: ./docker/secrets/GOOGLE_CLOUD_LOCATION
+  GOOGLE_APPLICATION_CREDENTIALS_JSON:
+    file: ./docker/secrets/GOOGLE_APPLICATION_CREDENTIALS_JSON

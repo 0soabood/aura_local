@@ -1,5 +1,5 @@
 import { GoogleGenAI } from "@google/genai";
-import { resolveModel } from "./ModelConfig";
+import { resolveModel } from "./ModelConfig.server";
 
 const PROMPT_TEMPLATE = `
 Analyze the following command and provide a structured technical response.

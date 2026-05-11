@@ -19,23 +19,6 @@ export const VERIFIED_VERIFICATION_STATES: readonly VerificationState[] = [
   'source_checked',
 ];
 
-// Runtime guard. Use at any boundary that accepts a verification_state from
-// untrusted input (HTTP body, partial update payload, etc.). Throws on drift.
-export function isVerificationState(value: unknown): value is VerificationState {
-  return typeof value === 'string'
-    && (VERIFICATION_STATES as readonly string[]).includes(value);
-}
-
-export function assertVerificationState(value: unknown): VerificationState {
-  if (!isVerificationState(value)) {
-    throw new Error(
-      `Invalid verification_state: ${JSON.stringify(value)}. ` +
-      `Allowed: ${VERIFICATION_STATES.join(', ')}`
-    );
-  }
-  return value;
-}
-
 // Canonical telemetry formulas; repositories should implement these definitions exactly.
 export const TELEMETRY_FORMULAS = {
   totalValueSignal: "SUM(roadmap_items.roi_score WHERE status = 'done')",
@@ -83,17 +66,14 @@ export interface ModelRun {
   model_id: string;
   prompt: string;
   response?: string;
-  // Lifecycle of the model run itself. Trust/verification is tracked
-  // separately on `verification_state` — do not conflate the two.
-  status: 'queued' | 'running' | 'completed' | 'failed';
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'verified';
   tokens_input?: number;
   tokens_output?: number;
   latency_ms?: number;
   verification_state: VerificationState;
   verification_reasoning?: string;
-  // v2 supervisor fields
   supervisor?: string;
-  domain?: SupervisorDomain;
+  domain?: string;
   escalation_reason?: string;
   created_at: string;
 }
@@ -105,7 +85,7 @@ export interface RoadmapItem {
   priority: number;
   roi_score: number;
   lane: string;
-  tags?: string; // JSON-stringified string[] — optional for backward compat
+  tags?: string;
   status: WorkflowStatus;
   verification_state: VerificationState;
   verification_reasoning?: string;
@@ -145,82 +125,12 @@ export interface TelemetryMetrics {
   recentActivity: { day: string; count: number }[];
 }
 
-// ── v2: Supervisor / Multi-model types ──────────────────────────────────────
-
-export type SupervisorDomain = 'research' | 'code' | 'planning';
-
-export interface Step {
-  model: string;                                       // "provider:model-id"
-  prompt: string;
-  expected_output_shape: 'json' | 'text' | 'code';
-  result?: string;                                     // populated after execution
-  latency_ms?: number;
-}
-
-export interface SupervisorTask {
-  domain: SupervisorDomain;
-  objective: string;
-  sessionId: string;
-  depth?: number;                                      // escalation recursion guard
-}
-
-export interface SupervisorPlan {
-  model_sequence: string[];
-  reasoning: string;
-  steps: Step[];
-  blackboard_updates: Record<string, any>;
-  escalation: boolean;
-  escalation_reason: string | null;
-  next_supervisor?: SupervisorDomain;
-  roi_estimate: number;                                // 0–10
-}
-
-export interface SupervisorResponse extends SupervisorPlan {
-  supervisor: string;
-  domain: SupervisorDomain;
-  final_response: string;
-  total_latency_ms: number;
-}
-
-export interface BlackboardEntry {
-  id: number;
-  session_id: string;
-  key: string;
-  value: string;                                       // JSON string
-  published_by: string;
-  published_at: string;
-  expires_at: string | null;
-  consumed_count: number;
-}
-
-export interface SupervisorStats {
-  supervisor: string;
-  domain: SupervisorDomain;
-  tasks_completed: number;
-  roi_total: number;
-  total_latency_ms: number;
-  /** Computed: total_latency_ms / tasks_completed */
-  avg_completion_time_ms: number;
-}
-
-export interface OrchestrateSession {
-  id: string;
-  title: string;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface OrchestrateResponse extends OrchestratorResult {
-  run_id: string;
-  session_id: string;
-}
-
 export interface AuraAPI {
   // Model Runs
   createModelRun: (data: Partial<ModelRun>) => Promise<{ id: string }>;
   listModelRuns: (limit?: number) => Promise<ModelRun[]>;
   updateModelRun: (id: string, updates: Partial<ModelRun>) => Promise<void>;
-
+  
   // Telemetry
   getStats: () => Promise<TelemetryMetrics>;
 
@@ -242,91 +152,25 @@ export interface AuraAPI {
   updateSnippet: (id: string, updates: Partial<ResearchSnippet>) => Promise<void>;
   deleteSnippet: (id: string) => Promise<void>;
   checkHealth: () => Promise<boolean>;
-  getActiveProvider: () => Promise<string>;
-  getAvailableModels: () => Promise<{
-    defaultModel: string;
-    providers: Array<{
-      id: string;
-      name: string;
-      hasKey: boolean;
-      models: Array<{ id: string; label: string }>;
-    }>;
-  } | null>;
 
-  // v2: Supervisor routing (legacy)
-  routeSupervisor: (task: Omit<SupervisorTask, 'depth'>) => Promise<SupervisorResponse>;
-
-  // v3: Reactive orchestrator
-  orchestrate: (message: string, sessionId?: string) => Promise<OrchestrateResponse>;
-
-  // v3: Session management
-  createSession: () => Promise<OrchestrateSession>;
-  listSessions: () => Promise<OrchestrateSession[]>;
-  getSessionEvents: (sessionId: string) => Promise<BlackboardEvent[]>;
-  deleteSession: (sessionId: string) => Promise<void>;
-  updateSession: (sessionId: string, updates: { title: string }) => Promise<void>;
-
-  // ROI
-  getRoiEvents: () => Promise<ROIEvent[]>;
-  createRoiEvent: (data: Partial<ROIEvent>) => Promise<{ id: string }>;
-  updateRoiEvent: (id: string, updates: Partial<ROIEvent>) => Promise<void>;
-  deleteRoiEvent: (id: string) => Promise<void>;
-
-  // UI layer — brutalist design components
-  getStatsV2: () => Promise<TelemetryMetricsV2>;
-  listSessionsV2: () => Promise<Session[]>;
-  streamOrchestrate: (
-    payload: {
-      preferredModel?: any;
-      modelConfig?: Record<string, string>;
-      agentModelOverrides?: Record<string, string>;
-      sessionId?: string | null;
-      message?: string;
-      prompt?: string;
-      debug?: boolean;
-    },
-    onEvent: (event: string, data: any) => void,
-  ) => Promise<void>;
-
-  // Settings persistence
-  saveSettings: (settings: any) => Promise<void>;
-  loadSettings: () => Promise<any>;
-}
-
-// ── UI design-layer additions ─────────────────────────────────────────────────
-
-/** Richer session shape used by the brutalist UI components. */
-export interface Session {
-  id: string;
-  name: string;
-  created_at: string;
-  state: 'running' | 'done' | 'error' | 'archived';
-  token_count: number;
-  model: string;
-}
-
-/** Alias for WorkflowStatus used by the brutalist Roadmap component. */
-export type RoadmapStatus = WorkflowStatus;
-
-/** Exported level union for use in SystemLogs component. */
-export type LogLevel = SystemLog['level'];
-
-/** SSE event envelope from the orchestrate stream. */
-export interface OrchestrateEvent {
-  type: 'token' | 'tool_call' | 'tool_result' | 'final' | 'error';
-  ts: string;
-  data: any;
-}
-
-/** Telemetry shape used by the ROI dashboard. */
-export interface TelemetryMetricsV2 {
-  total_routes: number;
-  avg_latency_ms: number;
-  success_rate: number;       // 0..1
-  est_token_cost_usd: number;
-  hourly_latency_ms: number[]; // 24 buckets
-  spend_series_usd: number[];
-  top_consumers?: { name: string; cost: number }[]; // Live aggregation by source
+  listSessions?: () => Promise<Session[]>;
+  listSessionsV2?: () => Promise<Session[]>;
+  createSession?: () => Promise<{ id: string, status?: string }>;
+  updateSession?: (sessionId: string, updates: any) => Promise<void>;
+  getSessionEvents?: (sessionId: string) => Promise<BlackboardEvent[]>;
+  deleteSession?: (sessionId: string) => Promise<void>;
+  getRoiEvents?: () => Promise<ROIEvent[]>;
+  createRoiEvent?: (data: any) => Promise<{ id: string }>;
+  updateRoiEvent?: (id: string, updates: any) => Promise<void>;
+  deleteRoiEvent?: (id: string) => Promise<void>;
+  orchestrate?: (message: string, sessionId?: string) => Promise<any>;
+  streamOrchestrate?: (payload: any, onEvent: (event: string, data: any) => void) => Promise<void>;
+  routeSupervisor?: (task: any) => Promise<any>;
+  saveSettings?: (settings: any) => Promise<void>;
+  loadSettings?: () => Promise<any>;
+  getAvailableModels?: () => Promise<any>;
+  getActiveProvider?: () => Promise<string>;
+  getStatsV2?: () => Promise<TelemetryMetricsV2>;
 }
 
 declare global {
@@ -335,75 +179,138 @@ declare global {
   }
 }
 
-// ── v3: Reactive Blackboard / Actor-Pub-Sub types ────────────────────────────
-
-export const EVENT_TYPES = [
-  'user_message',
-  'agent_output',
-  'execution_error',
-  'synthesis_complete',
-  'escalation_required',
-  'code_written',
-  'code_context_retrieved'
-] as const;
-
-export type EventType = (typeof EVENT_TYPES)[number];
-
-export const AGENT_NAMES = [
-  'research_agent',
-  'code_agent',
-  'synthesis_agent',
-  'orchestrator',
-  'supervisor_agent',
-] as const;
-
-export type AgentName = (typeof AGENT_NAMES)[number];
-
-/** Row in the append-only blackboard_events ledger */
-export interface BlackboardEvent {
-  id: number;
-  session_id: string;
-  seq: number;              // monotonic per session, 1-based
-  event_type: EventType;
-  author: AgentName | 'user';
-  content: string;          // raw text or JSON string — never binary
-  metadata: string | null;  // JSON: { confidence?, latency_ms?, model_id?, … }
-  created_at: string;
+export interface TelemetryMetricsV2 {
+  total_routes: number;
+  avg_latency_ms: number;
+  success_rate: number;
+  est_token_cost_usd: number;
+  route_count_series: number[];
+  hourly_latency_ms: number[];
+  success_rate_series: number[];
+  spend_series_usd: number[];
+  top_consumers: { name: string; cost: number }[];
 }
 
-/** Returned by ReactiveAgent.evaluate() — zero-cost, synchronous, no LLM calls */
+export type RoadmapStatus = WorkflowStatus;
+export type LogLevel = SystemLog['level'];
+
+export interface Session {
+  id: string;
+  name?: string;
+  title?: string;
+  state?: 'running' | 'idle' | 'done' | 'error' | 'archived';
+  status?: string;
+  token_count?: number;
+  created_at?: string;
+  updated_at: string;
+}
+
+export type EventType =
+  | 'user_message'
+  | 'agent_output'
+  | 'code_written'
+  | 'synthesis_complete'
+  | 'execution_error'
+  | 'escalation_required'
+  | 'agent_event'
+  | string;
+
+export type AgentName =
+  | 'research_agent'
+  | 'code_agent'
+  | 'synthesis_agent'
+  | 'bureaucracy_agent'
+  | 'etsy_agent'
+  | 'funding_agent'
+  | 'orchestrator'
+  | 'user'
+  | string;
+
+export interface BlackboardEvent {
+  id: string | number;
+  seq: number;
+  session_id: string;
+  event_type: EventType;
+  author: AgentName;
+  content: string;
+  created_at: string;
+  metadata: any;
+}
+
+export interface BlackboardEntry {
+  id?: string | number;
+  session_id?: string;
+  [key: string]: any;
+}
+
+export function assertVerificationState(state: any): asserts state is VerificationState {
+  if (!VERIFICATION_STATES.includes(state)) throw new Error(`Invalid verification state: ${state}`);
+}
+
 export interface AgentBid {
   agentName: AgentName;
-  confidence: number;         // 0.0 (abstain) – 1.0 (certain)
-  proposedAction: string;     // human-readable intent for logging
-  expectedOutputShape: 'text' | 'json' | 'code';
+  confidence: number;
+  proposedAction: string;
+  expectedOutputShape: string;
+  preferredModel?: string;
 }
 
-/** Returned by ReactiveAgent.execute() — agent controls termination via event_type */
 export interface AgentOutput {
-  event_type: EventType;      // 'synthesis_complete' | 'escalation_required' signals loop exit
+  event_type: EventType;
   content: string;
-  metadata?: Record<string, unknown>;
+  metadata?: any;
 }
 
-export type OrchestratorTermination =
-  | 'synthesis_complete'
-  | 'escalation_required'
-  | 'max_loops'
-  | 'no_bid';
+export interface OrchestratorTask {
+  id?: string;
+  sessionId?: string;
+  message?: string;
+  onProgress?: (event: string, data: any) => void;
+  [key: string]: any;
+}
 
 export interface OrchestratorResult {
-  sessionId: string;
-  events: BlackboardEvent[];
-  finalResponse: string;
-  totalLoops: number;
-  totalLatencyMs: number;
-  terminationReason: OrchestratorTermination;
+  activeAgent?: string;
+  [key: string]: any;
 }
 
-/** Replaces SupervisorTask for the v3 orchestrator */
-export interface OrchestratorTask {
+export type OrchestratorTermination = 'max_loops' | 'no_bid' | 'synthesis_complete' | 'escalation_required' | string;
+
+export type SupervisorDomain = 'research' | 'code' | 'bureaucracy' | 'funding' | 'etsy' | string;
+
+export interface SupervisorStats {
+  totalRuns: number;
+  [key: string]: any;
+}
+
+export interface SupervisorTask {
+  id?: string;
+  domain: SupervisorDomain;
+  objective: string;
   sessionId: string;
-  message: string;  // the raw user text; no domain pre-classification needed
-  onProgress?: (event: string, data: any) => void;
+  [key: string]: any;
+}
+
+export interface SupervisorResponse {
+  status?: string;
+  [key: string]: any;
+}
+
+export interface Step {
+  id?: string;
+  action?: string;
+  model?: string;
+  prompt?: string;
+  expected_output_shape?: string;
+  [key: string]: any;
+}
+
+export interface SupervisorPlan {
+  steps: Step[];
+  blackboard_updates?: Record<string, any>;
+  roi_estimate?: number;
+  escalation?: boolean;
+  next_supervisor?: string;
+  model_sequence?: string[];
+  [key: string]: any;
 }

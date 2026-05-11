@@ -47,7 +47,7 @@ export class Blackboard {
     const entries = runTransaction(() => {
       const rows = BlackboardRepository.findBySession(sessionId);
       if (rows.length > 0) {
-        BlackboardRepository.markConsumed(rows.map(e => e.id));
+        BlackboardRepository.markConsumed(rows.map(e => Number(e.id)));
       }
       return rows;
     }) as BlackboardEntry[];
