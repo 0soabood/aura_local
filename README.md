@@ -1,32 +1,95 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+![AURA Logo](https://via.placeholder.com/400x120/1a1a2e/ffffff?text=AURA+Local+Sync)
 
-# Run and deploy your AI Studio app
+# AURA Local Sync
 
-This contains everything you need to run your app locally.
+A local-first cognitive co-processor for solo builders. Aura extends the developer's attention, task initiation, and task completion — critical for ADHD-executive-function support where standard productivity tools fail with streaks, shame mechanics, and cloud dependency.
 
-View your app in AI Studio: https://ai.studio/apps/84cd1498-09cd-496e-a29f-e8dca0d0ae0f
+## What It Does
+
+- **Orchestration Engine**: React-based agents (Supervisor, Research, Code, Synthesis) working through LangGraph workflows
+- **Terminal**: Electron-powered command interface with live telemetry
+- **Roadmap & Research**: Persistent project tracking with structured verification states
+- **Model Registry**: Multi-provider support via OpenRouter with usage-aware routing
+- **Veto System**: Human-in-the-loop approval for any action before execution
 
 ## Run Locally
 
-**Prerequisites:**  Node.js
+**Prerequisites**: Node.js 20+
 
+```bash
+# Install dependencies
+npm install
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+# Set your API key in .env.local
+# (Copy from .env.example and add OPENROUTER_API_KEY)
+cp .env.example .env.local
+# Edit .env.local and add your OpenRouter API key
 
-## Domain Contract (Source of Truth)
+# Start the development server
+npm run dev
+```
 
-The canonical domain contract lives in [src/shared/types.ts](src/shared/types.ts):
+The app runs at http://localhost:3000
 
-- `VERIFICATION_STATES`: allowed lifecycle states for all verification-enabled records.
-- `VERIFIED_VERIFICATION_STATES`: trusted states used by telemetry health.
-- `TELEMETRY_FORMULAS`: human-readable formula contract for each metric.
+## Architecture
 
-Implementation note:
+```
+src/
+├── main/           # Express API server
+│   ├── app.ts      # Route definitions + orchestration endpoint
+│   └── index.ts    # Bootstraps Vite + Express
+├── lib/
+│   ├── agents/     # LangGraph agents (Supervisor, Research, Code, Synthesis)
+│   ├── graph/      # Workflow definitions
+│   ├── providers/  # Model providers (OpenRouter)
+│   ├── memory/     # Long-term memory system
+│   └── tools/      # Builtin tool registry
+├── components/     # React UI components
+├── stores/         # Zustand state management
+├── db/             # SQLite repositories
+└── shared/         # Shared TypeScript types
+```
 
-- Telemetry computation must stay aligned with these shared constants, and `StatsRepository` is expected to implement them exactly.
+## Environment
+
+Set at least one API key in `.env.local`:
+
+```
+OPENROUTER_API_KEY=sk-or-...
+```
+
+For Docker:
+
+```bash
+NODE_ENV=development RUNNING_IN_DOCKER=true npm run dev
+```
+
+## Domain Contract
+
+The canonical domain contract lives in `src/shared/types.ts`:
+
+- `VERIFICATION_STATES`: allowed lifecycle states for all verification-enabled records
+- `TELEMETRY_FORMULAS`: human-readable formula contract for each metric
+- `ModelProvider`: interface for all model provider implementations
+
+Telemetry computation must stay aligned with these shared constants.
+
+## Project Philosophy
+
+**Local-first**: No external tracking, no cloud dependency. Data sovereignty is non-negotiable.
+
+**No shame loops**: Built on accommodation rather than correction. Streaks, gamification, and external accountability are antithetical to the design goals.
+
+**Attention regulation**: Always orients back to priority. Presents the single smallest next action with enough specificity to be immediately executable.
+
+## Scripts
+
+- `npm run dev` — Start development server (Vite + Express)
+- `npm run build` — Build for production (Vite build + Electron packaging)
+- `npm run lint` — Type-check with TypeScript (`tsc --noEmit`)
+- `npm test` — Run test suite (Vitest)
+- `npm run rebuild` — Rebuild native modules (better-sqlite3)
+
+## License
+
+MIT
