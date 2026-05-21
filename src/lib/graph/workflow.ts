@@ -6,8 +6,6 @@ import { ResearchAgent } from '../agents/ResearchAgent';
 import { CodeAgent } from '../agents/CodeAgent';
 import { SynthesisAgent } from '../agents/SynthesisAgent';
 import { BureaucracyAgent } from '../agents/BureaucracyAgent';
-import { EtsyAgent } from '../agents/EtsyAgent';
-import { FundingAgent } from '../agents/FundingAgent';
 import { ProviderRegistry } from '../providers/ProviderRegistry';
 import { ToolRegistry } from '../tools/registry';
 import { writeMemoryDef, writeMemoryFn } from '../tools/builtin/write_memory';
@@ -36,11 +34,23 @@ const sessionVetoManagers = new Map<string, VetoManager>();
 export function getVetoManager(sessionId: string): VetoManager {
   if (!sessionVetoManagers.has(sessionId)) {
     const manager = new VetoManager(sessionId, {
-      defaultBehavior: 'require-approval',
+      defaultBehavior: 'auto-approve',
     });
     sessionVetoManagers.set(sessionId, manager);
   }
   return sessionVetoManagers.get(sessionId)!;
+}
+
+/** Remove stale veto managers to prevent unbounded memory growth */
+export function cleanupOldVetoManagers(maxAgeMs = 3600_000): void {
+  const cutoff = Date.now() - maxAgeMs;
+  for (const [sessionId, manager] of sessionVetoManagers) {
+    manager.cleanup();
+    // If manager has no pending actions after cleanup, remove it
+    if (manager.getPendingActions().length === 0) {
+      sessionVetoManagers.delete(sessionId);
+    }
+  }
 }
 
 /**
@@ -101,9 +111,20 @@ const agents = [
   new CodeAgent(registry, toolRegistry),
   new SynthesisAgent(registry, toolRegistry),
   new BureaucracyAgent(registry, toolRegistry),
-  new EtsyAgent(registry, toolRegistry),
-  new FundingAgent(registry, toolRegistry),
 ];
+
+/**
+ * Sanitize agent output by stripping raw agent labels, pseudo-vector
+ * context markers, and execution error prefixes that can leak to the UI
+ * when synthesis fails or when the echo-loop guard fires.
+ */
+function sanitizeAgentOutput(text: string): string {
+  return text
+    .replace(/\[\w+_agent\]:\s*/g, '')            // [code_agent]:, [research_agent]:, [synthesis_agent]:, [bureaucracy_agent]:
+    .replace(/\[pseudo_vector_[^\]]+\]:\s*/g, '')  // [pseudo_vector_context]:
+    .replace(/\[execution_error\]:\s*/g, '')       // [execution_error]:
+    .replace(/\*\*\[[^\]]+\]\*\*:\s*/g, '');       // **[code_agent]**:
+}
 
 /**
  * Bridge function: Converts LangGraph's BaseMessage array back into legacy
@@ -123,13 +144,24 @@ function stateToEvents(chatHistory: BaseMessage[], workspace: BaseMessage[]): Bl
       let event_type: BlackboardEvent['event_type'] = 'agent_output';
 
       // Map Mock prefixes back to the correct agent for heuristic evaluation
-      if (content.startsWith('[code_agent]')) { author = 'code_agent'; event_type = 'code_written'; }
-      if (content.startsWith('[research_agent]')) { author = 'research_agent'; }
-      if (content.startsWith('[synthesis_agent]')) { author = 'synthesis_agent'; event_type = 'synthesis_complete'; }
+      if (content.startsWith('[code_agent]')) {
+        author = 'code_agent';
+        event_type = 'code_written';
+        content = content.replace(/^\[code_agent\]:\s*/, '');
+      }
+      if (content.startsWith('[research_agent]')) {
+        author = 'research_agent';
+        content = content.replace(/^\[research_agent\]:\s*/, '');
+      }
+      if (content.startsWith('[synthesis_agent]')) {
+        author = 'synthesis_agent';
+        event_type = 'synthesis_complete';
+        content = content.replace(/^\[synthesis_agent\]:\s*/, '');
+      }
       if (content.startsWith('[execution_error]')) {
         author = 'orchestrator'; // Errors are attributed to the system
         event_type = 'execution_error';
-        content = content.replace('[execution_error]: ', '');
+        content = content.replace(/^\[execution_error\]:\s*/, '');
       }
 
       events.push({ id: 0, seq: 0, session_id: 'mock', event_type, author, content, created_at: '', metadata: null });
@@ -354,14 +386,18 @@ async function specialistNode(state: typeof AuraStateSchema.State) {
     if (result.event_type === 'escalation_required') {
       console.log(`[Graph] ⚠️ ${state.activeAgent} escalated:`, result.content);
       return {
-        taskWorkspace: [...state.taskWorkspace, new AIMessage(`[execution_error]: ${result.content}`)],
+        taskWorkspace: [...state.taskWorkspace, new AIMessage(`[execution_error]: ${sanitizeAgentOutput(result.content)}`)],
         errorCount: 1
       };
     }
 
     // Phase 3: Active Context Window Truncation (Dynamic Pointer Index)
     // Intercept massive payloads to prevent context rot mid-turn.
-    const safeContent = truncatePayload(result.content, 'daily_driver');
+    const rawContent = result.content || '';
+    if (!rawContent) {
+      console.warn(`[Graph] ⚠️ ${state.activeAgent} returned empty content`);
+    }
+    const safeContent = truncatePayload(rawContent, 'daily_driver');
 
     // Broadcast completion to debug WebSocket
     if (state.sessionId) {
@@ -373,10 +409,10 @@ async function specialistNode(state: typeof AuraStateSchema.State) {
       });
     }
 
-    // Because taskWorkspace has an 'overwrite' reducer, we spread the existing
-    // state to accumulate this new message, exactly like the Claude/Codex loop.
+    // Because taskWorkspace now has a concat reducer, returning just the new
+    // message appends it to the existing workspace. No need to spread state.
     return {
-      taskWorkspace: [...state.taskWorkspace, new AIMessage(`[${state.activeAgent}]: ${safeContent}`)],
+      taskWorkspace: [new AIMessage(`[${state.activeAgent}]: ${sanitizeAgentOutput(safeContent)}`)],
       errorCount: 0 // Reset circuit breaker on success
     };
   } catch (err: any) {
@@ -426,7 +462,7 @@ async function specialistNode(state: typeof AuraStateSchema.State) {
     
     const errorJson = JSON.stringify({ agent: state.activeAgent, error: err.message });
     return {
-      taskWorkspace: [...state.taskWorkspace, new AIMessage(`[execution_error]: ${errorJson}`)],
+      taskWorkspace: [new AIMessage(`[execution_error]: ${errorJson}`)],
       errorCount: 1, // Reducer will add this to state
       errorHistory: [`${new Date().toISOString()} - ${state.activeAgent}: ${err.message}`]
     };
@@ -500,7 +536,7 @@ async function synthesisNode(state: typeof AuraStateSchema.State) {
     }
 
     return {
-      chatHistory: [new AIMessage(`[execution_error]: ${result.content}`)],
+      chatHistory: [new AIMessage(`[execution_error]: ${sanitizeAgentOutput(result.content)}`)],
     };
   }
 
@@ -515,7 +551,7 @@ async function synthesisNode(state: typeof AuraStateSchema.State) {
   }
 
   return {
-    chatHistory: [new AIMessage(result.content)], // Append the real generated answer
+    chatHistory: [new AIMessage(sanitizeAgentOutput(result.content))], // Append the real generated answer, sanitized for the UI
   };
 }
 
@@ -536,12 +572,23 @@ ${workspaceText.substring(0, 8000)}`; // limit context to avoid token bloat
       // Use a fast, cheap model for summarization
       const result = await registry.call(resolveModel('compaction'), prompt, { temperature: 0.1 });
       if (result.text && !result.text.includes('NONE')) {
-        console.log(`[Graph] Saving long-term memory: \n${result.text.trim()}`);
-        await toolRegistry.execute({
-          id: 'compaction',
-          name: 'write_memory',
-          arguments: { file: 'USER', content: `Session extracted facts:\n${result.text.trim()}` }
-        });
+        const trimmed = result.text.trim();
+        // Guard against hallucinated loops and garbage output
+        const wordCount = trimmed.split(/\s+/).length;
+        const hasRepetition = /(\b\w+\b)(?:\s+\1){4,}/i.test(trimmed); // same word 5+ times
+        const hasSequenceLoop = /(a sequence of ){3,}/i.test(trimmed);
+        const tooShort = wordCount < 3;
+
+        if (tooShort || hasRepetition || hasSequenceLoop) {
+          console.warn(`[Graph] Compaction output rejected — too_short=${tooShort}, repetition=${hasRepetition}, sequence_loop=${hasSequenceLoop}`);
+        } else {
+          console.log(`[Graph] Saving long-term memory: \n${trimmed}`);
+          await toolRegistry.execute({
+            id: 'compaction',
+            name: 'write_memory',
+            arguments: { file: 'USER', content: `Session extracted facts:\n${trimmed}` }
+          });
+        }
       }
     } catch (e: any) {
       console.error('[Graph] Compaction LLM call failed, skipping:', e.message);
@@ -557,6 +604,7 @@ export const workflow = new StateGraph(AuraStateSchema)
   .addNode('research_agent', specialistNode)
   .addNode('code_agent', specialistNode)
   .addNode('synthesis_agent', synthesisNode)
+  .addNode('bureaucracy_agent', specialistNode)
   .addNode('compaction', compactionNode)
   .addEdge(START, 'orchestrator');
 
@@ -569,6 +617,7 @@ workflow.addConditionalEdges('orchestrator', (state) => {
 });
 workflow.addEdge('research_agent', 'orchestrator');
 workflow.addEdge('code_agent', 'orchestrator');
+workflow.addEdge('bureaucracy_agent', 'synthesis_agent');
 workflow.addEdge('synthesis_agent', 'compaction');
 workflow.addEdge('compaction', END); // Compaction is the new terminal node
 

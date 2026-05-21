@@ -88,6 +88,42 @@ export class SynthesisAgent extends BaseAgent {
 
     const agentOutputs = currentTurnEvents.filter(e => e.event_type === 'agent_output' || e.event_type === 'code_written');
     
+    // --- BUG-5: Detect which agents produced output for targeted synthesis instructions ---
+    const hasCodeOutput = agentOutputs.some(
+      e => e.author === 'code_agent' || e.event_type === 'code_written'
+    );
+    const hasMemoryOutput = agentOutputs.some(
+      e => e.author === 'memory_agent' || e.author === 'bureaucracy_agent'
+    );
+    const hasResearchOutput = agentOutputs.some(
+      e => e.author === 'research_agent'
+    );
+
+    const instructionParts: string[] = [];
+    if (hasCodeOutput) {
+      instructionParts.push(
+        'The Code Agent has produced implementations. Summarize the changes, show key code snippets, and explain what was built.'
+      );
+    }
+    if (hasMemoryOutput) {
+      instructionParts.push(
+        'The Memory Agent has stored new facts. Summarize what was remembered and why it matters.'
+      );
+    }
+    if (hasResearchOutput) {
+      instructionParts.push(
+        'The Research Agent has gathered information. Synthesize the findings into a coherent answer.'
+      );
+    }
+
+    let synthesisInstruction = '';
+    if (instructionParts.length > 0) {
+      synthesisInstruction =
+        'SYNTHESIS INSTRUCTION: You are synthesizing outputs from specialist agents.\n\n' +
+        instructionParts.join('\n\n') +
+        '\n\nProvide a clear, well-formatted response that addresses the user\'s original query. Use markdown formatting where appropriate.';
+    }
+
     const hasPendingTask = events.some(e => (e.event_type as string) === 'task_proposed');
     const SYSTEM_PROMPT = buildSynthesisPrompt({
       hasPendingTask,
@@ -96,6 +132,12 @@ export class SynthesisAgent extends BaseAgent {
 
     // ONLY pass current turn events to buildMessages — prevents history bleed/echo
     const messages = this.buildMessages(currentTurnEvents, SYSTEM_PROMPT);
+
+    // BUG-5: Inject synthesis instruction as a user message after the system prompt
+    if (synthesisInstruction) {
+      // Insert right after the system message (index 1), before any conversation
+      messages.splice(1, 0, { role: 'user', content: synthesisInstruction });
+    }
 
     // Check if bid contains a preferredModel override
     let model = (bid as any).preferredModel || resolveModel('agent_orchestrator');
@@ -132,13 +174,63 @@ export class SynthesisAgent extends BaseAgent {
       };
     }
 
+    // Guard against hallucinated echo loops (model outputs its own output repetitively)
+    const rawText = result.text || '';
+    const hasEchoLoop = /(a sequence of ){5,}/i.test(rawText)
+      || /((\b\w+\b)(\s+\2){7,})/i.test(rawText);  // same word repeated 8+ times
+    if (rawText && hasEchoLoop) {
+      console.warn(`[Synthesis] Echo loop detected in output, falling back to summary. First 100 chars: "${rawText.slice(0, 100)}"`);
+      const agentOutputs = currentTurnEvents.filter(e => e.event_type === 'agent_output' || e.event_type === 'code_written');
+      const summary = agentOutputs.length
+        ? `I processed the following information but encountered a synthesis error. Here is a raw summary of what was found:\n\n${
+            agentOutputs.map(o => `- **[${o.author}]**: ${(o.content || '').slice(0, 200)}`).join('\n')
+          }`
+        : 'I received your request but was unable to produce a clean response. Please try rephrasing or breaking your request into smaller parts.';
+      return {
+        event_type: 'synthesis_complete',
+        content: summary,
+        metadata: {
+          model_id:   result.model,
+          latency_ms: result.latencyMs,
+          confidence: bid.confidence,
+          echo_loop_fallback: true,
+        },
+      };
+    }
+
+    // BUG-5: Trim and strip internal markers like [code_agent]:, [memory_agent]:, [research_agent]:
+    let responseText = (result.text || '').trim();
+    // Strip leading internal agent markers that the LLM may have echoed back
+    responseText = responseText.replace(/^\[(code_agent|memory_agent|research_agent|bureaucracy_agent)\]:\s*/gi, '').trim();
+    // Strip any remaining internal markers mid-response
+    responseText = responseText.replace(/\[(code_agent|memory_agent|research_agent|bureaucracy_agent)\]:\s*/gi, '').trim();
+
+    if (!responseText) {
+      // BUG-5: Defensive fallback — graceful fallback with raw agent outputs
+      if (agentOutputs.length > 0) {
+        const fallbackParts = agentOutputs.map(o => {
+          const agentLabel = o.author === 'code_agent' || o.event_type === 'code_written'
+            ? 'Code Agent'
+            : o.author === 'memory_agent' || o.author === 'bureaucracy_agent'
+              ? 'Memory Agent'
+              : o.author === 'research_agent'
+                ? 'Research Agent'
+                : o.author || 'Agent';
+          return `**${agentLabel}** produced the following:\n\n${o.content || '(no output)'}`;
+        });
+        responseText = fallbackParts.join('\n\n---\n\n');
+      } else {
+        responseText = 'I received your request but no agent output was available to synthesize. Please try rephrasing your request.';
+      }
+    }
+
     // Persist a one-sentence summary to USER.md — best-effort, never crashes synthesis.
     const memReg = this.toolRegistry ?? new ToolRegistry();
     if (!memReg.has('write_memory')) memReg.register(writeMemoryDef, writeMemoryFn);
     if (!memReg.has('write_file')) memReg.register(writeFileDef, writeFileFn);
     if (!memReg.has('edit_file')) memReg.register(editFileDef, editFileFn);
     if (!memReg.has('run_command')) memReg.register(runCommandDef, runCommandFn);
-    const summary = result.text.slice(0, 200).replace(/\n/g, ' ').trim();
+    const summary = responseText.slice(0, 200).replace(/\n/g, ' ').trim();
     if (summary) {
       memReg.execute({
         id:        'synthesis_memory',
@@ -152,7 +244,7 @@ export class SynthesisAgent extends BaseAgent {
 
     return {
       event_type: 'synthesis_complete',
-      content:    result.text,
+      content:    responseText,
       metadata: {
         model_id:   result.model,
         latency_ms: result.latencyMs,

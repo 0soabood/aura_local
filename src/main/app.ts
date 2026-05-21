@@ -10,6 +10,7 @@ import express, { Express, NextFunction, Request, Response } from 'express';
 import cors from 'cors';
 import * as fs from 'fs';
 import * as path from 'path';
+import { createHash } from 'crypto';
 import { SystemLogRepository } from '../db/repositories/SystemLogRepository';
 import { SnippetRepository } from '../db/repositories/SnippetRepository';
 import { RoadmapRepository } from '../db/repositories/RoadmapRepository';
@@ -29,8 +30,32 @@ import { writeMemoryFn } from '../lib/tools/builtin/write_memory';
 import { broadcastEvent, debugEmitter } from '../lib/debug';
 import db from '../db/connection';
 import { ProviderRegistry } from '../lib/providers/ProviderRegistry';
+import { hasKey, isUserKey, setUserKey, getMaskedPreview } from '../lib/providers/ByokStore';
 import { getVetoManager } from '../lib/graph/workflow';
 import { DEFAULT_VETO_CONFIG } from '../lib/veto/types';
+
+// ── InjectionGuard ────────────────────────────────────────────────────
+// Lightweight regex-based prompt injection sanitizer (SEC-1).
+function injectionGuard(input: string): { blocked: boolean; reason?: string } {
+  const patterns = [
+    /ignore\s+all\s+previous\s+instructions/i,
+    /output\s+system\s+prompt/i,
+    /disregard\s+rules/i,
+    /ignore.*previous.*instruction/i,
+    /output.*system.*prompt/i,
+  ];
+
+  for (const pattern of patterns) {
+    if (pattern.test(input)) {
+      const inputHash = createHash('sha256').update(input).digest('hex');
+      SystemLogRepository.create('warn', 'Security', 'Prompt injection attempt detected', { inputHash });
+      return { blocked: true, reason: 'Message matched a known prompt injection pattern.' };
+    }
+  }
+
+  return { blocked: false };
+}
+// ── ───────────────────────────────────────────────────────────────────
 
 // Cached ProviderRegistry instance (initialized once, reused across requests)
 let cachedRegistry: any = null;
@@ -83,6 +108,13 @@ export function createApiApp(): Express {
 
   app.use(cors());
   app.use(express.json());
+  app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+    // Custom error handler for malformed JSON
+    if (err instanceof SyntaxError && 'body' in err) {
+      return res.status(400).json({ error: 'Malformed JSON payload' });
+    }
+    next(err);
+  });
 
   // ── API Key Authentication Middleware ────────────────────────────────
   // Checks for X-API-Key header. Set AURA_API_KEY env var, or it defaults to 'dev-key'
@@ -280,13 +312,15 @@ export function createApiApp(): Express {
     }> = [];
 
     for (const cfg of configs) {
-      const hasKey = !!process.env[cfg.envKey];
+      const providerHasKey = hasKey(cfg.id, cfg.envKey);
+      const byokSet = isUserKey(cfg.id, cfg.envKey);
       const providerName = cfg.id.toUpperCase();
 
       const providerEntry = {
         id: cfg.id,
-        name: hasKey ? `${providerName}` : `${providerName} 🔒`,
-        hasKey,
+        name: providerHasKey ? `${providerName}` : `${providerName} 🔒`,
+        hasKey: providerHasKey,
+        byok: byokSet,
         models: [] as Array<{ id: string; label: string }>,
       };
 
@@ -392,6 +426,20 @@ export function createApiApp(): Express {
 
   const inFlight = new Set<string>();
 
+  /**
+   * Sanitize agent labels from text before sending to the UI.
+   * Strips raw agent name prefixes, pseudo-vector markers, and
+   * execution error labels that may leak from the graph internals.
+   * This is the final defense against BUG-6.
+   */
+  function sanitizeAgentLabels(text: string): string {
+    return text
+      .replace(/\[\w+_agent\]:\s*/g, '')            // [code_agent]:, [research_agent]:, etc.
+      .replace(/\[pseudo_vector_[^\]]+\]:\s*/g, '')  // [pseudo_vector_context]:
+      .replace(/\[execution_error\]:\s*/g, '')       // [execution_error]:
+      .replace(/\*\*\[[^\]]+\]\*\*:\s*/g, '');       // **[code_agent]**:
+  }
+
   app.post('/api/sessions', (_req, res) => {
     const id = crypto.randomUUID();
     const session = OrchestrateSessionRepository.create(id, 'New Session');
@@ -425,6 +473,19 @@ export function createApiApp(): Express {
     res.sendStatus(204);
   });
 
+  // Reset a stuck session (removes from in-flight set)
+  app.post('/api/sessions/:id/reset', (req, res) => {
+    const id = req.params.id;
+    inFlight.delete(id);
+    // Update the session state to idle in the database
+    try {
+      db.prepare('UPDATE orchestrate_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(id);
+      res.json({ success: true, session_id: id, message: 'Session reset. You can now send messages to this session again.' });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // ── v3: Reactive Blackboard orchestrator ────────────────────────────────
 
   app.post('/api/orchestrate', async (req, res) => {
@@ -436,6 +497,12 @@ export function createApiApp(): Express {
       const { message, sessionId } = req.body;
       if (!message?.trim()) return res.status(400).json({ error: '`message` is required' });
       if (message.length > 10_000) return res.status(400).json({ error: '`message` must be 10,000 characters or fewer' });
+
+      // SEC-1: Prompt injection guard — check before creating any session or executing the graph
+      const guardResult = injectionGuard(message);
+      if (guardResult.blocked) {
+        return res.status(400).json({ error: 'This request was flagged and blocked.', flagged: true });
+      }
 
       resolvedSessionId = sessionId || crypto.randomUUID();
 
@@ -568,10 +635,28 @@ export function createApiApp(): Express {
             finalEventType = 'escalation_required';
             finalResponse = finalResponse.replace('[execution_error]: ', '');
           }
+          // Strip any agent labels / pseudo-vector markers that may have leaked (BUG-6)
+          finalResponse = sanitizeAgentLabels(finalResponse);
           const meta = (lastMessage as any).response_metadata || {};
           modelId = meta.model_name || meta.model || 'unknown';
           tokensIn = meta.tokenUsage?.promptTokens || 0;
           tokensOut = meta.tokenUsage?.completionTokens || 0;
+        }
+      }
+
+      // BUG-7: Detect error conditions for stream event type
+      const isStreamError = finalEventType === 'escalation_required'
+        || !finalResponse
+        || finalResponse === "Workflow ended without generating a response.";
+      if (isStream) {
+        if (isStreamError) {
+          sendEvent('error', {
+            type: 'error',
+            agent: 'synthesis_agent',
+            content: finalEventType === 'escalation_required'
+              ? finalResponse || 'An execution error occurred during processing.'
+              : 'Synthesis returned empty content.',
+          });
         }
       }
 
@@ -626,7 +711,8 @@ export function createApiApp(): Express {
       }
 
       if (isStream) {
-        sendEvent('done', payload);
+        // BUG-7: Send error event instead of done when execution errored or result was empty
+        sendEvent(isStreamError ? 'error' : 'done', payload);
         res.end();
       } else {
         res.json(payload);
@@ -883,6 +969,74 @@ export function createApiApp(): Express {
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
+  });
+
+  // ── BYOK (Bring Your Own Key) ──────────────────────────────────────────
+  app.get('/api/providers/keys', (_req, res) => {
+    const PROVIDER_ENV_KEYS: Record<string, string> = {
+      openrouter: 'OPENROUTER_API_KEY',
+      groq: 'GROQ_API_KEY',
+    };
+    
+    const providers = Object.entries(PROVIDER_ENV_KEYS).map(([id, envKey]) => {
+      const masked = getMaskedPreview(id, envKey);
+      const envSet = !!process.env[envKey];
+      const userSet = isUserKey(id, envKey);
+      
+      return {
+        id,
+        envKey,
+        hasEnvKey: envSet,
+        hasUserKey: userSet,
+        maskedPreview: masked,
+        source: userSet ? 'user' as const : envSet ? 'env' as const : 'none' as const,
+      };
+    });
+    
+    res.json({ providers });
+  });
+
+  app.put('/api/providers/keys/:providerId', (req, res) => {
+    const { providerId } = req.params;
+    const { apiKey } = req.body;
+    
+    if (!providerId) return res.status(400).json({ error: 'providerId is required' });
+    if (typeof apiKey !== 'string') return res.status(400).json({ error: 'apiKey must be a string' });
+    
+    const PROVIDER_ENV_KEYS: Record<string, string> = {
+      openrouter: 'OPENROUTER_API_KEY',
+      groq: 'GROQ_API_KEY',
+    };
+    
+    if (!(providerId in PROVIDER_ENV_KEYS)) {
+      return res.status(400).json({ error: `Unknown provider "${providerId}". Known: ${Object.keys(PROVIDER_ENV_KEYS).join(', ')}` });
+    }
+    
+    setUserKey(providerId, apiKey);
+    const masked = getMaskedPreview(providerId, PROVIDER_ENV_KEYS[providerId]);
+    
+    SystemLogRepository.create('audit', 'BYOK', `API key ${apiKey ? 'set' : 'cleared'} for ${providerId}`, {
+      providerId,
+      hasKey: !!apiKey,
+    });
+    
+    res.json({ 
+      success: true, 
+      providerId, 
+      hasUserKey: !!apiKey,
+      maskedPreview: masked,
+      source: apiKey ? 'user' as const : 'none' as const,
+    });
+  });
+
+  app.delete('/api/providers/keys/:providerId', (req, res) => {
+    const { providerId } = req.params;
+    if (!providerId) return res.status(400).json({ error: 'providerId is required' });
+    
+    setUserKey(providerId, '');
+    
+    SystemLogRepository.create('audit', 'BYOK', `API key cleared for ${providerId}`, { providerId });
+    res.json({ success: true, providerId, cleared: true });
   });
 
   // ── Veto Layer ───────────────────────────────────────────────────────

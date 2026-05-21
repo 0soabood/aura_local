@@ -11,6 +11,7 @@ export function useChatStream() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [activeAgent, setActiveAgent] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const sessionIdRef = useRef(sessionId);
   
   // Keep ref in sync
@@ -19,6 +20,7 @@ export function useChatStream() {
   const sendMessage = useCallback(async (message: string) => {
     setIsStreaming(true);
     setActiveAgent('orchestrator');
+    setError(null);
 
     // 1. Optimistically add the user's message to the UI
     const optimisticMsg: BlackboardEvent = {
@@ -79,6 +81,8 @@ export function useChatStream() {
             });
             setSessionId(data.sessionId);
             setActiveAgent(null);
+          } else if (eventType === 'error') {
+            setError(data.content || 'An error occurred during processing.');
           }
         }
       );
@@ -90,5 +94,5 @@ export function useChatStream() {
     }
   }, []); // Remove events and sessionId from deps - using functional updates and ref
 
-  return { events, isStreaming, activeAgent, sendMessage };
+  return { events, isStreaming, activeAgent, sessionId, error, sendMessage };
 }
