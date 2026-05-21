@@ -215,6 +215,23 @@ export abstract class BaseAgent implements ReactiveAgent {
       totalLatency   += result.latencyMs;
       lastModel       = result.model;
 
+      // Verbose thinking trace — the actual LLM reasoning text before any tool call decision
+      if (result.text?.length > 10) {
+        broadcastEvent(sessionId, {
+          event_type: 'react_verbose',
+          author: this.name,
+          content: result.text,
+          metadata: {
+            step: step + 1,
+            maxIterations: this.maxIterations,
+            model: lastModel,
+            tokensIn: result.tokensIn,
+            tokensOut: result.tokensOut,
+            latencyMs: result.latencyMs,
+          },
+        });
+      }
+
       if (!result.toolCalls?.length) {
         broadcastEvent(sessionId, { event_type: 'react_observe', author: this.name, content: `Final answer generated.` });
         return {
@@ -247,6 +264,17 @@ export abstract class BaseAgent implements ReactiveAgent {
         }
 
         broadcastEvent(sessionId, { event_type: 'react_act', author: this.name, content: `Executing tool: ${tc.function?.name}` });
+
+        // Verbose tool call — show the actual arguments passed to the tool
+        const argCount = Object.keys(toolArgs).length;
+        if (argCount > 0) {
+          broadcastEvent(sessionId, {
+            event_type: 'react_verbose',
+            author: this.name,
+            content: `[tool:${tc.function?.name}] args: ${JSON.stringify(toolArgs).slice(0, 500)}`,
+            metadata: { toolName: tc.function?.name, toolArgs, step: step + 1 },
+          });
+        }
 
         const toolResult = await toolRegistry.execute({
           id:        tc.id ?? `tool_${step}_${tc.function?.name}`,

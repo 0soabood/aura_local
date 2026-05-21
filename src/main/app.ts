@@ -28,6 +28,7 @@ import { HumanMessage, AIMessage, BaseMessage } from '@langchain/core/messages';
 import { reloadAuraMemory, getAuraMemory } from '../lib/memory/loader';
 import { writeMemoryFn } from '../lib/tools/builtin/write_memory';
 import { broadcastEvent, debugEmitter } from '../lib/debug';
+import { persistDiagnosticEvents } from '../lib/eventPersister';
 import db from '../db/connection';
 import { getSharedRegistryAsync } from '../lib/RegistrySingleton';
 import { hasKey, isUserKey, setUserKey, getMaskedPreview } from '../lib/providers/ByokStore';
@@ -520,6 +521,10 @@ export function createApiApp(): Express {
         
         // Listen for internal broadcasts to stream live ReAct trace
         debugEmitter.on(`debug:${resolvedSessionId}`, handleDebugEvent);
+
+        // Persist diagnostic events (thinking trace, tool calls, bids) so they
+        // survive session reloads and can be viewed in the thinking trace panel.
+        persistDiagnosticEvents(resolvedSessionId);
 
         // C1: On client disconnect, clean up immediately rather than
         // waiting for the LangGraph execution to complete. This prevents

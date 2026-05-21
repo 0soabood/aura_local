@@ -5,7 +5,7 @@ import { BlackboardEvent } from '../shared/types';
 import { DebugPanel } from './DebugPanel';
 import { ChatMessage } from './ChatMessage';
 import { useBrainDumpMode, useSetBrainDumpMode, useSelectedModel, useSetSelectedModel } from '../stores/useAura';
-import { VetoPanel } from './VetoPanel';
+// VetoPanel import removed — replaced by new ApprovalModal in AuraApp
 
 const getAura = () => (window as any).aura;
 

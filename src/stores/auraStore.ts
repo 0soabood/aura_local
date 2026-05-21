@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { BlackboardEvent, RoadmapItem, SystemLog, TelemetryMetrics } from '../shared/types';
+import type { VetoAction } from '../lib/veto/types';
 
 export type ModelRole = 'daily_driver' | 'long_context' | 'reasoning' | 'agent_orchestrator' | 'vision' | 'translate' | 'compaction' | 'bulk_fast' | 'experimental';
 
@@ -17,6 +18,7 @@ export interface AgentEvent {
   agent: string;
   content: string;
   timestamp: number;
+  metadata?: any;
 }
 
 export interface AgentBid {
@@ -93,6 +95,10 @@ export interface AuraState {
   agentModelOverrides: Record<string, string>;
   setModelForAgent: (agent: string, model: string) => void;
   resetAgentModelOverrides: () => void;
+
+  // Veto / Approval
+  pendingApproval: VetoAction | null;
+  setPendingApproval: (action: VetoAction | null) => void;
 }
 
 const getAura = () => (window as any).aura;
@@ -267,7 +273,7 @@ export const useAuraStore = create<AuraState>()(
                         // The server uses 'author' (not 'agent') for the agent name.
                         const realEventType = data.event_type || sseEventType;
                         const agentName = data.author || data.agent || 'system';
-                        const evt: AgentEvent = { type: realEventType, agent: agentName, content: data.content || '', timestamp: Date.now() };
+                        const evt: AgentEvent = { type: realEventType, agent: agentName, content: data.content || '', timestamp: Date.now(), metadata: data.metadata };
                         set((s) => ({ agentEvents: [...s.agentEvents, evt] }));
 
                         if (agentName && !agentName.includes('orchestrator')) {
@@ -294,6 +300,23 @@ export const useAuraStore = create<AuraState>()(
                             timestamp: Date.now(),
                           };
                           set((s) => ({ messages: [...s.messages, errMsg] }));
+                        }
+
+                        // Handle veto/approval events
+                        if (realEventType === 'approval_required' && data.action) {
+                          set({ pendingApproval: data.action });
+                        }
+                        if (realEventType === 'veto_action_update' && data.action) {
+                          // If the action was resolved (approved/rejected), clear the modal
+                          if (['approved', 'rejected', 'modified'].includes(data.action.status)) {
+                            set((s) => {
+                              // Only clear if it matches the current pending action
+                              if (s.pendingApproval?.id === data.action.id) {
+                                return { pendingApproval: null };
+                              }
+                              return {};
+                            });
+                          }
                         }
                       } catch { /* skip parse errors */ }
                     }
@@ -428,6 +451,10 @@ export const useAuraStore = create<AuraState>()(
         agentModelOverrides: { ...state.agentModelOverrides, [agent]: model }
       })),
       resetAgentModelOverrides: () => set({ agentModelOverrides: {} }),
+
+      // Veto / Approval
+      pendingApproval: null,
+      setPendingApproval: (action) => set({ pendingApproval: action }),
     }),
     {
       name: 'aura-store',

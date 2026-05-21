@@ -4,12 +4,15 @@ import { LiveNodeGraph } from './LiveNodeGraph';
 import { AgentStatusPanel } from './AgentStatusPanel';
 import { SessionsList } from './SessionsList';
 import { SettingsPanel } from './SettingsPanel';
+import { ThinkingTrace } from './ThinkingTrace';
+import { ApprovalModal } from './ApprovalModal';
 import {
   useIsOrchestrating,
   useActiveAgent,
   useEnergyMode,
   useBrainDumpMode,
   useSelectedModel,
+  usePendingApproval,
 } from '../stores/useAura';
 
 const AGENT_LABELS: Record<string, string> = {
@@ -27,8 +30,10 @@ export const AuraApp: React.FC = () => {
   const energyMode = useEnergyMode();
   const brainDumpMode = useBrainDumpMode();
   const selectedModel = useSelectedModel();
+  const pendingApproval = usePendingApproval();
   const [activeView, setActiveView] = useState<ViewType>('compose');
   const [showRightPanel, setShowRightPanel] = useState(true);
+  const [showTrace, setShowTrace] = useState(false);
 
   const statusLabel = isOrchestrating
     ? (activeAgent ? AGENT_LABELS[activeAgent] || 'Running' : 'Running')
@@ -60,6 +65,10 @@ export const AuraApp: React.FC = () => {
           >
             ⬡ AURA
           </button>
+          {/* Workspace badge */}
+          <span className="flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-mono border border-white/5 bg-white/[0.02] text-white/20">
+            📁 workspace
+          </span>
           {/* Status chip — non-interactive */}
           <div className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-mono border ${statusBg} ${statusColor} pointer-events-none select-none`}>
             <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
@@ -165,9 +174,33 @@ export const AuraApp: React.FC = () => {
                 <LiveNodeGraph />
               </div>
             </div>
-            {/* Agent states (bottom half) */}
-            <div className="flex-1 min-h-0 overflow-y-auto">
-              <AgentStatusPanel />
+            {/* Agent states / Thinking Trace (bottom half) */}
+            <div className="flex-1 min-h-0 flex flex-col">
+              <div className="flex items-center border-b border-white/[0.04] shrink-0">
+                <button
+                  onClick={() => setShowTrace(false)}
+                  className={`flex-1 py-1.5 text-[8px] font-mono uppercase tracking-wider transition-colors ${
+                    !showTrace
+                      ? 'text-indigo-400/70 border-b border-indigo-500/30 bg-indigo-500/[0.04]'
+                      : 'text-white/15 hover:text-white/30'
+                  }`}
+                >
+                  Agent Status
+                </button>
+                <button
+                  onClick={() => setShowTrace(true)}
+                  className={`flex-1 py-1.5 text-[8px] font-mono uppercase tracking-wider transition-colors ${
+                    showTrace
+                      ? 'text-indigo-400/70 border-b border-indigo-500/30 bg-indigo-500/[0.04]'
+                      : 'text-white/15 hover:text-white/30'
+                  }`}
+                >
+                  Thinking Trace
+                </button>
+              </div>
+              <div className="flex-1 min-h-0 overflow-hidden">
+                {showTrace ? <ThinkingTrace /> : <AgentStatusPanel />}
+              </div>
             </div>
           </div>
         )}
@@ -191,6 +224,8 @@ export const AuraApp: React.FC = () => {
           <span>All Systems Operational</span>
         </div>
       </footer>
+      {/* Approval modal overlay */}
+      {pendingApproval && <ApprovalModal action={pendingApproval} />}
     </div>
   );
 };

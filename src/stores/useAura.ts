@@ -108,6 +108,10 @@ export const useResetAgentModelOverrides = () => useAuraStore(state => state.res
 export const useModelForAgent = (agent: string) =>
   useAuraStore(state => state.agentModelOverrides[agent] || null);
 
+// Veto / Approval hooks
+export const usePendingApproval = () => useAuraStore(state => state.pendingApproval);
+export const useSetPendingApproval = () => useAuraStore(state => state.setPendingApproval);
+
 // Combined action hooks
 export const useFetchAllData = () => {
   const fetchSessions = useFetchSessions();

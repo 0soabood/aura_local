@@ -1,5 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { useMessages, useSendMessage, useIsOrchestrating, useActiveAgent, useAgentBids, useAgentEvents, useSelectedModel, useEnergyMode, usePendingMessages } from '../stores/useAura';
+import { useMessages, useSendMessage, useIsOrchestrating, useActiveAgent, useAgentBids, useAgentEvents, useSelectedModel, useEnergyMode, usePendingMessages, useActiveSession } from '../stores/useAura';
+import { useAuraStore, ChatMessage } from '../stores/auraStore';
+import { FileLink } from './FileLink';
+import { ToolCallCard } from './ToolCallCard';
 
 const AGENT_COLORS: Record<string, string> = {
   research_agent: '#22d3ee',
@@ -27,6 +30,7 @@ const TASK_CHIPS = [
 
 export const ChatPanel: React.FC = () => {
   const messages = useMessages();
+  const activeSession = useActiveSession();
   const sendMessage = useSendMessage();
   const isOrchestrating = useIsOrchestrating();
   const activeAgent = useActiveAgent();
@@ -42,6 +46,81 @@ export const ChatPanel: React.FC = () => {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, agentEvents]);
+
+  // ── Load session messages when switching sessions ──
+  useEffect(() => {
+    if (!activeSession) return;
+
+    const loadSessionMessages = async () => {
+      try {
+        const data = (window as any).aura?.getSessionEvents
+          ? await (window as any).aura.getSessionEvents(activeSession)
+          : await fetch(`/api/sessions/${activeSession}/events`).then(res => res.ok ? res.json() : []).catch(() => []);
+
+        if (!Array.isArray(data)) return;
+
+        const loaded: ChatMessage[] = data
+          .filter((e: any) =>
+            e.event_type === 'user_message' ||
+            e.event_type === 'synthesis_complete' ||
+            e.event_type === 'agent_output' ||
+            e.event_type === 'execution_error' ||
+            e.event_type === 'escalation_required'
+          )
+          .map((e: any): ChatMessage => {
+            let role: ChatMessage['role'] = 'agent';
+            let content = e.content || '';
+
+            if (e.event_type === 'user_message') {
+              role = 'user';
+            } else if (e.event_type === 'synthesis_complete') {
+              role = 'synthesis';
+            } else if (e.event_type === 'execution_error' || e.event_type === 'escalation_required') {
+              role = 'error';
+              try { content = JSON.parse(content).reason || content; } catch { /* keep raw */ }
+            }
+
+            return {
+              id: typeof e.id === 'string' ? e.id : String(e.id),
+              role,
+              content,
+              agent: e.author,
+              timestamp: e.created_at ? new Date(e.created_at).getTime() : Date.now(),
+            };
+          });
+
+        useAuraStore.setState({ messages: loaded });
+
+        // Also load diagnostic events (thinking trace, tool calls, bids) so the
+        // ThinkingTrace panel shows historical data for previously persisted events.
+        const traceEvents = data
+          .filter((e: any) =>
+            e.event_type === 'react_think' ||
+            e.event_type === 'react_verbose' ||
+            e.event_type === 'react_act' ||
+            e.event_type === 'react_observe' ||
+            e.event_type === 'agent_bid' ||
+            e.event_type === 'agent_output' ||
+            e.event_type === 'code_written'
+          )
+          .map((e: any) => ({
+            type: e.event_type,
+            agent: e.author || e.agentName || 'system',
+            content: e.content || '',
+            timestamp: e.created_at ? new Date(e.created_at).getTime() : Date.now(),
+            metadata: typeof e.metadata === 'string' ? JSON.parse(e.metadata) : e.metadata || undefined,
+          }));
+
+        if (traceEvents.length > 0) {
+          useAuraStore.setState({ agentEvents: traceEvents });
+        }
+      } catch (err) {
+        console.error('Failed to load session events:', err);
+      }
+    };
+
+    loadSessionMessages();
+  }, [activeSession]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -169,27 +248,20 @@ export const ChatPanel: React.FC = () => {
                         </span>
                       </div>
                     )}
-                    <div className="whitespace-pre-wrap leading-relaxed">{msg.content}</div>
+                    <div className="whitespace-pre-wrap leading-relaxed"><FileLink content={msg.content} /></div>
                     <div className="text-[9px] text-white/15 mt-1.5 font-mono">{formatTime(msg.timestamp)}</div>
                   </div>
                 </div>
               );
             })}
 
-            {/* Live agent events — filter out meta/system events */}
+            {/* Live agent events — ToolCallCard for rich display */}
             {agentEvents.filter(e => !['done', 'no_bids', 'error', 'agent_event'].includes(e.type)).slice(-4).map((evt, i) => (
-              <div key={`${i}-${evt.timestamp}`} className="flex justify-start">
-                <div className="max-w-[85%] rounded px-2.5 py-1.5 text-[10px] font-mono"
-                  style={{
-                    backgroundColor: `${AGENT_COLORS[evt.agent] || '#6366f1'}06`,
-                    border: `1px solid ${AGENT_COLORS[evt.agent] || '#6366f1'}12`,
-                    color: `${AGENT_COLORS[evt.agent] || '#6366f1'}80`,
-                  }}
-                >
-                  <span className="opacity-40">[{evt.type}]</span>{' '}
-                  {AGENT_LABELS[evt.agent] || evt.agent}: {evt.content.slice(0, 100)}{evt.content.length > 100 ? '…' : ''}
-                </div>
-              </div>
+              <ToolCallCard
+                key={`${i}-${evt.timestamp}`}
+                event={evt}
+                agentColor={AGENT_COLORS[evt.agent]}
+              />
             ))}
 
             {/* Orchestrating indicator */}

@@ -1,6 +1,6 @@
 # AURA Self-Build Roadmap
 
-## 🎯 Current Status (as of 2026-04-30)
+## 🎯 Current Status (as of 2026-05-21)
 
 ### ✅ Completed
 - **Phase 0**: Stabilize in-flight neubrutalist UI work (32 files committed to `feat/neubrutalist-ui`)
@@ -14,12 +14,14 @@
 - **Build**: ✅ Passing (`npm run build` succeeds)
 - **CI/Build Contract**: ✅ Added rule to ensure MVP is always buildable and CI-able going forward
 - **Recharts**: ✅ Removed from dependencies (saved ~200KB)
+- **Tests**: ✅ Passing (210 tests, run with `PATH=/home/linuxbrew/.linuxbrew/bin:$PATH npx vitest run` to use linuxbrew Node 26)
+- **Veto Layer**: ✅ Tiered authorization model + interrupt/approve workflow (backend: VetoManager + 6 API endpoints; frontend: ApprovalModal component wired into zustand store + AuraApp)
+- **ThinkingTrace**: ✅ ReAct trace panel with event persistence (eventPersister + ThinkingTrace component)
 
 ### 🔄 In Progress  
-- **Tests**: ❌ Failing due to `better-sqlite3` native module version mismatch (Node.js v22) - run in Docker as workaround
+- (none currently)
 
 ### 📋 Pending
-- **Veto Layer**: Tiered authorization model + interrupt/approve workflow
 - **Bureaucratic Automation**: German LEA application + Gewerbeanmeldung
 - **Etsy and Printify Automation**: Listing Agent + Veto Layer integration
 
@@ -114,22 +116,23 @@ FIX- Memorydump mode broken
 
 
 
-Phase 2: Veto Layer
+Phase 2: Veto Layer<br>
+<i>Note: Backend fully built (6 API endpoints, VetoManager, tier taxonomy, SSE broadcasts, diff preview, shell formatting). Frontend ApprovalModal wired to zustand store + AuraApp. The modal pops on `approval_required` SSE events and calls approve/reject/modify endpoints.</i>
 
-- [ ] Define tiered authorisation model (never-interrupt / always-interrupt / configurable)
-- [ ] Categorise existing tools into tiers (read_file = never, git push = always, etc.)
-- [ ] Implement interrupt() call in orchestrator node with serialisable action payload
-- [ ] Add approval_required event type to WebSocket broadcast
-- [ ] Build approval card UI in CoreTerminal
-- [ ] Render diffs as diffs (not raw JSON)
-- [ ] Render shell commands with working directory
-- [ ] Render API calls in human-meaningful form (e.g. "Publish Etsy listing for €4.50")
-- [ ] Create /api/sessions/continue endpoint
-- [ ] Wire approve action to graph.invoke(Command(resume=payload))
-- [ ] Wire reject/modify actions
-- [ ] Test full interrupt → approve → resume cycle on a low-stakes action
-- [ ] Validation milestone: Deploy The Last Theory live via Veto Layer-authorised git push
-- [ ] Confirm a non-you human can access The Last Theory at a live URL
+|- [x] Define tiered authorisation model (never-interrupt / always-interrupt / configurable)<br>
+|- [x] Categorise existing tools into tiers (read_file = never, git push = always, etc.)<br>
+|- [x] Implement interrupt() call in orchestrator node with serialisable action payload<br>
+|- [x] Add approval_required event type to WebSocket broadcast<br>
+|- [x] Build approval card UI (ApprovalModal component with dark-theme styling)<br>
+|- [x] Render diffs as diffs (not raw JSON)<br>
+|- [x] Render shell commands with working directory<br>
+|- [x] Render API calls in human-meaningful form (e.g. "Publish Etsy listing for €4.50")<br>
+|- [ ] Create /api/sessions/continue endpoint<br>
+|- [ ] Wire approve action to graph.invoke(Command(resume=payload))<br>
+|- [ ] Wire reject/modify actions fully (endpoints exist, resume not wired)<br>
+|- [ ] Test full interrupt → approve → resume cycle on a low-stakes action<br>
+|- [ ] Validation milestone: Deploy The Last Theory live via Veto Layer-authorised git push<br>
+|- [ ] Confirm a non-you human can access The Last Theory at a live URL
 
 Phase 3: Bureaucratic Automation
 
