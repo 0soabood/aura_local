@@ -24,8 +24,22 @@ describe('CoreTerminal Resiliency (SSE Streaming)', () => {
     };
     
     // Mock fetch for the local streamOrchestrate fallback
+    // Also needs to handle fetchModels() which calls fetch('/api/models') and expects .json()
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
+      json: vi.fn().mockResolvedValue({
+        providers: [
+          {
+            id: 'openrouter',
+            name: 'OPENROUTER',
+            hasKey: true,
+            models: [
+              { id: 'openrouter:google/gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+              { id: 'openrouter:meta-llama/llama-3.3-70b-instruct:free', label: 'Llama 3.3 70B (Free)' },
+            ],
+          },
+        ],
+      }),
       body: {
         getReader: () => ({
           read: vi.fn()
@@ -50,7 +64,7 @@ describe('CoreTerminal Resiliency (SSE Streaming)', () => {
 
     render(<CoreTerminal />);
     
-    const input = screen.getByPlaceholderText('Enter objective...');
+    const input = screen.getByPlaceholderText('ENTER OBJECTIVE...');
     fireEvent.change(input, { target: { value: 'Test message' } });
     fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
 
@@ -75,7 +89,7 @@ describe('CoreTerminal Resiliency (SSE Streaming)', () => {
     });
 
     render(<CoreTerminal />);
-    const input = screen.getByPlaceholderText('Enter objective...');
+    const input = screen.getByPlaceholderText('ENTER OBJECTIVE...');
     fireEvent.change(input, { target: { value: 'Echo test' } });
     fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
 
@@ -94,7 +108,7 @@ describe('CoreTerminal Resiliency (SSE Streaming)', () => {
     });
 
     render(<CoreTerminal />);
-    const input = screen.getByPlaceholderText('Enter objective...');
+    const input = screen.getByPlaceholderText('ENTER OBJECTIVE...');
     fireEvent.change(input, { target: { value: 'Break it' } });
     fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
 
@@ -111,32 +125,32 @@ describe('CoreTerminal Resiliency (SSE Streaming)', () => {
     render(<CoreTerminal />);
     
     // Component should render without crashing
-    await waitFor(() => {
-      expect(screen.getByPlaceholderText('Enter objective...')).toBeTruthy();
+await waitFor(() => {
+      expect(screen.getByPlaceholderText('ENTER OBJECTIVE...')).toBeTruthy();
     });
   });
 
   it('receives and renders act events via WebSocket', async () => {
     render(<CoreTerminal />);
     
-    await waitFor(() => {
-      expect(screen.getByPlaceholderText('Enter objective...')).toBeTruthy();
+await waitFor(() => {
+      expect(screen.getByPlaceholderText('ENTER OBJECTIVE...')).toBeTruthy();
     });
   });
 
   it('receives and renders observe events via WebSocket', async () => {
     render(<CoreTerminal />);
     
-    await waitFor(() => {
-      expect(screen.getByPlaceholderText('Enter objective...')).toBeTruthy();
+await waitFor(() => {
+      expect(screen.getByPlaceholderText('ENTER OBJECTIVE...')).toBeTruthy();
     });
   });
 
   it('renders events incrementally as they arrive via WebSocket', async () => {
     render(<CoreTerminal />);
     
-    await waitFor(() => {
-      expect(screen.getByPlaceholderText('Enter objective...')).toBeTruthy();
+await waitFor(() => {
+      expect(screen.getByPlaceholderText('ENTER OBJECTIVE...')).toBeTruthy();
     });
   });
 
@@ -146,8 +160,8 @@ describe('CoreTerminal Resiliency (SSE Streaming)', () => {
     
     // The debug panel should exist (even if hidden initially)
     // Just verify the component renders without crashing
-    await waitFor(() => {
-      expect(screen.getByPlaceholderText('Enter objective...')).toBeTruthy();
+await waitFor(() => {
+      expect(screen.getByPlaceholderText('ENTER OBJECTIVE...')).toBeTruthy();
     });
   });
 });

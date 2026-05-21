@@ -32,6 +32,8 @@ export interface CallOptions {
       function: { name: string; arguments: string };
     }>;
   }>;
+  /** Timeout in milliseconds for the LLM API call (default: 30000). */
+  timeoutMs?: number;
 }
 
 export interface ProviderResult {

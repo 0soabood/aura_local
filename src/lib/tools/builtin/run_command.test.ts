@@ -27,8 +27,6 @@ describe('isAllowed', () => {
   });
 
   it('allows prefix-extended commands', () => {
-    expect(isAllowed('git commit -m "fix typo"')).toBe(true);
-    expect(isAllowed('git add src/foo.ts')).toBe(true);
     expect(isAllowed('npm run build')).toBe(true);
   });
 

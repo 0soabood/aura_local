@@ -1,5 +1,6 @@
 import { SupervisorTask, SupervisorResponse, SupervisorPlan, Step, SupervisorDomain } from '../shared/types';
-import { ProviderRegistry } from './providers/ProviderRegistry';
+import { getSharedRegistry } from './RegistrySingleton';
+import type { ProviderRegistry } from './providers/ProviderRegistry';
 import { resolveModel } from './ModelConfig.server';
 import { Blackboard } from './Blackboard';
 import { SupervisorStatsRepository } from '../db/repositories/SupervisorStatsRepository';
@@ -24,7 +25,7 @@ export class SupervisorRouter {
   private readonly blackboard: Blackboard;
 
   constructor() {
-    this.registry = new ProviderRegistry();
+    this.registry = getSharedRegistry();
     this.blackboard = new Blackboard();
   }
 

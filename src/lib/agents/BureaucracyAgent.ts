@@ -46,10 +46,39 @@ export class BureaucracyAgent {
       'ht w', 'studies', 'automation', 'ai agent',
     ];
 
+    // Memory keywords for "remember/save/note/store" commands
+    const memoryKeywords = [
+      'remember', 'save this', 'note this', 'store this',
+      'memorize', 'write down', 'keep in mind', 'don\'t forget',
+      'record this', 'make a note', 'log this', 'save to memory',
+    ];
+
     const hasBureaucracyKeyword = bureaucracyKeywords.some(k => content.includes(k));
-    
-    if (!hasBureaucracyKeyword) {
-      return { agentName: this.name as any, confidence: 0, proposedAction: 'Not a bureaucracy task', expectedOutputShape: 'text' };
+    const hasMemoryKeyword = memoryKeywords.some(k => content.includes(k));
+
+    // Don't re-bid if we already produced output this turn (prevents blocking synthesis)
+    const reversedUserIdx = [...events].reverse().findIndex(e => e.event_type === 'user_message');
+    const lastUserIdx = reversedUserIdx >= 0 ? events.length - 1 - reversedUserIdx : 0;
+    const eventsAfterLastUser = events.slice(lastUserIdx + 1);
+    const alreadyCompleted = eventsAfterLastUser.some(
+      e => e.event_type === 'agent_output' && e.author === 'bureaucracy_agent'
+    );
+    if (alreadyCompleted) {
+      return { agentName: this.name as any, confidence: 0, proposedAction: 'Already completed this turn', expectedOutputShape: 'text' };
+    }
+
+    if (!hasBureaucracyKeyword && !hasMemoryKeyword) {
+      return { agentName: this.name as any, confidence: 0, proposedAction: 'Not a bureaucracy or memory task', expectedOutputShape: 'text' };
+    }
+
+    // Memory commands get high confidence — write to memory tool
+    if (hasMemoryKeyword && !hasBureaucracyKeyword) {
+      return {
+        agentName: this.name as any,
+        confidence: 0.85,
+        proposedAction: `Save to memory: ${content.slice(0, 50)}...`,
+        expectedOutputShape: 'text',
+      };
     }
 
     // Calculate confidence based on keyword matches
@@ -91,7 +120,20 @@ export class BureaucracyAgent {
     const userQuery = lastUserMessage.content;
 
     try {
-      // Determine document type from user query
+      // Handle memory commands
+      const memoryKeywords = [
+        'remember', 'save this', 'note this', 'store this',
+        'memorize', 'write down', 'keep in mind', 'don\'t forget',
+        'record this', 'make a note', 'log this', 'save to memory',
+      ];
+      const content = userQuery.toLowerCase();
+      const isMemoryCmd = memoryKeywords.some(k => content.includes(k));
+
+      if (isMemoryCmd) {
+        return await this.saveToMemory(userQuery);
+      }
+
+      // Determine document type for bureaucracy tasks
       const docType = this.determineDocumentType(userQuery);
       const language = userQuery.toLowerCase().includes('german') || userQuery.toLowerCase().includes('deutsch') ? 'de' : 'en';
 
@@ -149,6 +191,69 @@ ${this.getNextSteps(docType)}
       return {
         event_type: 'execution_error',
         content: `BureaucracyAgent error: ${err.message}`,
+      };
+    }
+  }
+
+  private async saveToMemory(query: string): Promise<AgentOutput> {
+    try {
+      // Extract the fact/note from the query
+      const fact = query.replace(/^(remember|save this|note this|store this|memorize|write down|keep in mind|record this|make a note|log this|save to memory)[\s:,-]+/i, '').trim();
+
+      if (!fact) {
+        return {
+          event_type: 'execution_error',
+          content: 'No fact provided to save. Format: "Remember: <fact>" or "Save to memory: <fact>"',
+        };
+      }
+
+      const result = await this.toolRegistry.execute({
+        id: `memory_${Date.now()}`,
+        name: 'write_memory',
+        arguments: {
+          file: 'USER',
+          content: `Remembered fact: ${fact}`,
+        },
+      });
+
+      if (result.isError) {
+        return {
+          event_type: 'execution_error',
+          content: `Failed to save to memory: ${result.content}`,
+        };
+      }
+
+      // P3: Surface preference update transparency
+      const resultText = String(result.content ?? '');
+      if (resultText.includes('→')) {
+        // Extract the update arrow display
+        const updateMatch = resultText.match(/Updated\s+USER\.md:\s*(.+)/);
+        const updateDisplay = updateMatch ? updateMatch[1] : resultText;
+        return {
+          event_type: 'agent_output',
+          content: `🔄 **Updated memory:** ${updateDisplay}\n\nThis preference will be used in future sessions.`,
+          metadata: {
+            model_id: 'bureaucracy_agent',
+            latency_ms: 0,
+            factLength: fact.length,
+            update: true,
+          },
+        };
+      }
+
+      return {
+        event_type: 'agent_output',
+        content: `✅ **Saved to memory:** "${fact}"\n\nThis will be available in future sessions.`,
+        metadata: {
+          model_id: 'bureaucracy_agent',
+          latency_ms: 0,
+          factLength: fact.length,
+        },
+      };
+    } catch (err: any) {
+      return {
+        event_type: 'execution_error',
+        content: `Memory save error: ${err.message}`,
       };
     }
   }

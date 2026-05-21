@@ -1,40 +1,115 @@
 @import "tailwindcss";
 
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
+
 :root {
-  /* ── Neubrutalist Design Tokens ─────────────────────────────── */
+  /* ── Dark Professional Multi-Agent AI Desktop Tokens ────────────────────── */
+  
+  /* Backgrounds */
+  --bg-deep: #0a0a14;
+  --bg-primary: #10101f;
+  --bg-panel: #141425;
+  --bg-card: #1a1a30;
+  --bg-card-hover: #22223a;
+  --bg-input: #0e0e1a;
+  
   /* Typography */
-  --font-display: 'Fraunces', serif;
+  --font-display: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-
-  /* Colors */
-  --bone: #f5f1eb;
-  --ink: #1a1a2e;
-  --oxblood: #8b1a1a;
-  --chartreuse: #d4ed3a;
-  --marigold: #f5c542;
-  --ultramarine: #3b4cca;
-
-  /* Semantic aliases */
-  --bg: var(--bone);
-  --text: var(--ink);
-  --panel: #ffffff;
-  --panel-2: #f9f9f9;
-  --border: var(--ink);
-  --rule: var(--ink);
-
-  /* Shadows & Borders */
-  --shadow-hard: 4px 4px 0 var(--rule);
-  --rule-thick: 2px solid var(--rule);
-
+  
+  /* Text */
+  --text-primary: #e2e8f0;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --text-accent: #c4b5fd;
+  
+  /* Accents */
+  --accent-purple: #a855f7;
+  --accent-cyan: #22d3ee;
+  --accent-green: #10b981;
+  --accent-amber: #f59e0b;
+  --accent-rose: #f43f5e;
+  
+  /* Legacy mappings (for existing code compatibility) */
+  --bone: var(--text-primary);
+  --ink: var(--bg-deep);
+  --chartreuse: var(--accent-green);
+  --oxblood: var(--accent-rose);
+  --marigold: var(--accent-amber);
+  --ultramarine: var(--accent-cyan);
+  --bg: var(--bg-deep);
+  --text: var(--text-primary);
+  --panel: var(--bg-panel);
+  --panel-2: var(--bg-card);
+  --border: #2a2a45;
+  --rule: #2a2a45;
+  --text-1: var(--text-primary);
+  --text-2: var(--text-secondary);
+  --border-1: var(--border);
+  
+  /* Borders */
+  --rule-thick: 1px solid var(--border);
+  --border-subtle: 1px solid rgba(168, 85, 247, 0.15);
+  --border-glow: 1px solid rgba(168, 85, 247, 0.4);
+  
+  /* Shadows & Glows */
+  --shadow-hard: 0 4px 24px rgba(0, 0, 0, 0.4);
+  --glow-purple: 0 0 20px rgba(168, 85, 247, 0.3);
+  --glow-cyan: 0 0 20px rgba(34, 211, 238, 0.3);
+  --glow-purple-strong: 0 0 40px rgba(168, 85, 247, 0.5), 0 0 80px rgba(168, 85, 247, 0.2);
+  --glow-cyan-strong: 0 0 40px rgba(34, 211, 238, 0.5), 0 0 80px rgba(34, 211, 238, 0.2);
+  
   /* Spacing */
   --gap-sm: 0.25rem;
   --gap-md: 0.5rem;
   --gap-lg: 1rem;
+  
+  /* Transitions */
+  --transition-fast: 150ms ease;
+  --transition-normal: 250ms ease;
+  --transition-slow: 400ms ease;
+  
+  /* Border Radius */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+}
 
-  /* Legacy mappings for existing code */
-  --bg-1: var(--panel);
-  --bg-2: var(--panel-2);
-  --text-1: var(--text);
-  --text-2: var(--text);
-  --border-1: var(--border);
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  background-color: var(--bg-deep);
+  color: var(--text-primary);
+  font-family: var(--font-display);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-primary);
+}
+::-webkit-scrollbar-thumb {
+  background: #2a2a45;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3a3a55;
+}
+
+/* Selection */
+::selection {
+  background: rgba(168, 85, 247, 0.3);
+  color: var(--text-primary);
 }

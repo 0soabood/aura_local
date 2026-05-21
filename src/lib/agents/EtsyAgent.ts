@@ -46,8 +46,8 @@ export class EtsyAgent {
       'publish', 'draft', 'activate',
     ];
 
-    const hasEtsyKeyword = etsyKeywords.some(k => content.includes(k));
-    
+    const hasEtsyKeyword = etsyKeywords.filter(k => content.includes(k)).length >= 2;
+
     if (!hasEtsyKeyword) {
       return { agentName: this.name as any, confidence: 0, proposedAction: 'Not an Etsy task', expectedOutputShape: 'text' };
     }

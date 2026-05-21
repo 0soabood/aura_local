@@ -1,64 +1,66 @@
 // ModelConfig.ts - Browser-compatible model configuration
 // Note: quotaTracker is exported from a separate file (ModelConfig.server.ts)
 // to avoid pulling better-sqlite3 into browser bundles
+//
+// Updated: Groq added as primary/fallback for ultra-fast inference
 
 export const MODEL_ROLES = {
   daily_driver: {
-    primary: 'openrouter:meta-llama/llama-3.3-70b-instruct:free',
-    fallbacks: ['openrouter:mistralai/mistral-7b-instruct:free', 'openrouter:google/gemma-3-12b-it:free'],
+    primary: 'groq:llama-3.3-70b-versatile',
+    fallbacks: ['groq:llama-3.1-8b-instant', 'openrouter:meta-llama/llama-3.3-70b-instruct:free', 'openrouter:mistralai/mistral-7b-instruct:free'],
     maxTokens: 8000,
-    contextWindow: 128000,
+    contextWindow: 131072,
   },
   long_context: {
-    primary: 'openrouter:meta-llama/llama-3.3-70b-instruct:free',
-    fallbacks: ['openrouter:mistralai/mistral-7b-instruct:free', 'openrouter:google/gemma-3-12b-it:free'],
+    primary: 'groq:llama-3.3-70b-versatile',
+    fallbacks: ['groq:llama-3.1-8b-instant', 'openrouter:meta-llama/llama-3.3-70b-instruct:free'],
     maxTokens: 8000,
-    contextWindow: 128000,
+    contextWindow: 131072,
   },
   reasoning: {
-    primary: 'openrouter:meta-llama/llama-3.3-70b-instruct:free',
-    fallbacks: ['openrouter:mistralai/mistral-7b-instruct:free', 'openrouter:google/gemma-3-12b-it:free'],
+    primary: 'groq:llama-3.3-70b-versatile',
+    fallbacks: ['groq:qwen/qwen3-32b', 'openrouter:meta-llama/llama-3.3-70b-instruct:free'],
     maxTokens: 8000,
-    contextWindow: 128000,
+    contextWindow: 131072,
     dailyQuota: 50,
   },
   agent_orchestrator: {
-    primary: 'openrouter:meta-llama/llama-3.3-70b-instruct:free',
-    fallbacks: ['openrouter:mistralai/mistral-7b-instruct:free', 'openrouter:google/gemma-3-12b-it:free'],
+    primary: 'groq:llama-3.3-70b-versatile',
+    fallbacks: ['groq:llama-3.1-8b-instant', 'openrouter:meta-llama/llama-3.3-70b-instruct:free', 'openrouter:mistralai/mistral-7b-instruct:free'],
     maxTokens: 8000,
-    contextWindow: 128000,
+    contextWindow: 131072,
   },
   vision: {
     primary: 'openrouter:meta-llama/llama-3.3-70b-instruct:free',
-    fallbacks: ['openrouter:mistralai/mistral-7b-instruct:free', 'openrouter:google/gemma-3-12b-it:free'],
+    fallbacks: ['openrouter:mistralai/mistral-7b-instruct:free', 'groq:llama-3.3-70b-versatile'],
     maxTokens: 8000,
-    contextWindow: 128000,
+    contextWindow: 131072,
     dailyQuota: 50,
   },
   translate: {
-    primary: 'openrouter:meta-llama/llama-3.3-70b-instruct:free',
-    fallbacks: ['openrouter:mistralai/mistral-7b-instruct:free', 'openrouter:google/gemma-3-12b-it:free'],
+    primary: 'groq:llama-3.1-8b-instant',
+    fallbacks: ['groq:qwen/qwen3-32b', 'openrouter:meta-llama/llama-3.3-70b-instruct:free'],
     maxTokens: 8000,
-    contextWindow: 128000,
+    contextWindow: 131072,
     dailyQuota: 50,
   },
   compaction: {
-    primary: 'openrouter:mistralai/mistral-7b-instruct:free',
-    fallbacks: ['openrouter:google/gemma-3-12b-it:free', 'openrouter:meta-llama/llama-3.3-70b-instruct:free'],
+    primary: 'groq:llama-3.1-8b-instant',
+    fallbacks: ['groq:qwen/qwen3-32b', 'openrouter:mistralai/mistral-7b-instruct:free'],
     maxTokens: 4000,
-    contextWindow: 32000,
+    contextWindow: 131072,
   },
   bulk_fast: {
-    primary: 'openrouter:mistralai/mistral-7b-instruct:free',
-    fallbacks: ['openrouter:google/gemma-3-12b-it:free', 'openrouter:meta-llama/llama-3.3-70b-instruct:free'],
+    primary: 'groq:llama-3.1-8b-instant',
+    fallbacks: ['groq:qwen/qwen3-32b', 'openrouter:mistralai/mistral-7b-instruct:free'],
     maxTokens: 8000,
-    contextWindow: 32000,
+    contextWindow: 131072,
   },
   experimental: {
-    primary: 'openrouter:google/gemma-3-12b-it:free',
-    fallbacks: ['openrouter:mistralai/mistral-7b-instruct:free', 'openrouter:meta-llama/llama-3.3-70b-instruct:free'],
+    primary: 'groq:qwen/qwen3-32b',
+    fallbacks: ['groq:llama-3.1-8b-instant', 'openrouter:google/gemma-3-12b-it:free'],
     maxTokens: 8000,
-    contextWindow: 32000,
+    contextWindow: 131072,
   },
 } as const;
 

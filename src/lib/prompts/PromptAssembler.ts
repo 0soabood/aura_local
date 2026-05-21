@@ -57,6 +57,13 @@ const FRAGMENTS: PromptFragment[] = [
     render: () => `Lead with the answer. Do not use filler phrases like "Here is the code" or "I can help with that". No meta-commentary.`,
   },
   {
+    id: 'context_discipline',
+    tokens: 35,
+    priority: 'critical',
+    condition: () => true,
+    render: () => `NEVER repeat or echo internal context blocks, file paths with scores, pseudo-vector search results, or system metadata in your output. These are injected for your reference only. Do not output "Relevant Files", "Score:", or raw context chunks.`,
+  },
+  {
     id: 'doing_tasks',
     tokens: 40,
     priority: 'high',

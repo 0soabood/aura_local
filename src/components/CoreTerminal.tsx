@@ -5,7 +5,6 @@ import { BlackboardEvent } from '../shared/types';
 import { DebugPanel } from './DebugPanel';
 import { ChatMessage } from './ChatMessage';
 import { useBrainDumpMode, useSetBrainDumpMode, useSelectedModel, useSetSelectedModel } from '../stores/useAura';
-import SettingsPanel from './settings/SettingsPanel';
 import { VetoPanel } from './VetoPanel';
 
 const getAura = () => (window as any).aura;
@@ -113,7 +112,6 @@ export default function CoreTerminal() {
   const [wsConnected, setWsConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const [energyMode, setEnergyMode] = useState<'low' | 'high'>('high');
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [vetoPanelOpen, setVetoPanelOpen] = useState(false);
   // Use Zustand store for brainDumpMode and model selection
   const brainDumpMode = useBrainDumpMode();
@@ -898,24 +896,6 @@ export default function CoreTerminal() {
                 </div>
               )}
             </div>
-
-            <button
-              onClick={() => setSettingsOpen(true)}
-              style={{
-                padding: '0.75rem',
-                borderRadius: '0.5rem',
-                border: 'var(--rule-thick)',
-                background: 'var(--bone)',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-              title="Model Settings"
-              disabled={status === 'running'}
-            >
-              <Cog size={16} />
-            </button>
 
             <button
               onClick={() => setEnergyMode(prev => prev === 'high' ? 'low' : 'high')}

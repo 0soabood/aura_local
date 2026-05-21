@@ -16,8 +16,8 @@ describe('SynthesisAgent', () => {
   beforeEach(() => {
     registry = new ProviderRegistry();
     agent = new SynthesisAgent(registry);
-    // Make cohere available to match 'agent_orchestrator' role
-    vi.spyOn(registry, 'getAvailableProviders').mockReturnValue([{ id: 'cohere' } as any]);
+    // agent_orchestrator primary is groq:llama-3.3-70b-versatile
+    vi.spyOn(registry, 'getAvailableProviders').mockReturnValue([{ id: 'groq' } as any]);
   });
 
   describe('evaluate()', () => {
@@ -81,6 +81,12 @@ describe('SynthesisAgent', () => {
         errorMessage: 'Rate limit exceeded',
         retryAfterSeconds: 30,
       } as any);
+
+      // runReactLoop falls back to callWithFallback on rate limit;
+      // mock it to throw so we exercise the catch → escalation_required path.
+      vi.spyOn(registry, 'callWithFallback').mockRejectedValue(
+        new Error('All providers rate limited')
+      );
 
       const events: BlackboardEvent[] = [
         evt({ event_type: 'user_message', author: 'user', content: 'hello' }),

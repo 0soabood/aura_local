@@ -2,11 +2,16 @@ import { vi } from 'vitest';
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, beforeEach } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
 
 // Mock better-sqlite3 using the __mocks__ folder (automatic mock)
 vi.mock('better-sqlite3');
 
 import NavigationHub from './NavigationHub';
+
+function renderWithRouter(ui: React.ReactElement) {
+  return render(<MemoryRouter>{ui}</MemoryRouter>);
+}
 
 describe('NavigationHub Crash Resilience', () => {
   beforeEach(() => {
@@ -31,7 +36,7 @@ describe('NavigationHub Crash Resilience', () => {
   });
 
   it('renders without crashing when all data is empty', async () => {
-    render(<NavigationHub />);
+    renderWithRouter(<NavigationHub />);
     
     await waitFor(() => {
       // Check for HUB tag which is unique to NavigationHub
@@ -46,7 +51,7 @@ describe('NavigationHub Crash Resilience', () => {
       { id: '3', name: 'Test', state: 'running' }, // Missing token_count
     ]);
 
-    render(<NavigationHub />);
+    renderWithRouter(<NavigationHub />);
     
     await waitFor(() => {
       expect(screen.getByText('HUB')).toBeTruthy();
@@ -56,7 +61,7 @@ describe('NavigationHub Crash Resilience', () => {
   it('renders without crashing when stats is null', async () => {
     (window as any).aura.getStatsV2 = vi.fn().mockResolvedValue(null);
 
-    render(<NavigationHub />);
+    renderWithRouter(<NavigationHub />);
     
     await waitFor(() => {
       expect(screen.getByText('HUB')).toBeTruthy();
@@ -70,7 +75,7 @@ describe('NavigationHub Crash Resilience', () => {
     (window as any).aura.getSnippets = vi.fn().mockRejectedValue(new Error('API Error'));
     (window as any).aura.listLogs = vi.fn().mockRejectedValue(new Error('API Error'));
 
-    render(<NavigationHub />);
+    renderWithRouter(<NavigationHub />);
     
     await waitFor(() => {
       expect(screen.getByText('HUB')).toBeTruthy();
@@ -85,7 +90,7 @@ describe('NavigationHub Crash Resilience', () => {
       { id: '2', name: 'Test', state: 'invalid-state', token_count: null },
     ]);
 
-    render(<NavigationHub />);
+    renderWithRouter(<NavigationHub />);
     
     await waitFor(() => {
       expect(screen.getByText('HUB')).toBeTruthy();
@@ -98,7 +103,7 @@ describe('NavigationHub Crash Resilience', () => {
       { id: '1', name: longName, state: 'done', token_count: 1000 },
     ]);
 
-    render(<NavigationHub />);
+    renderWithRouter(<NavigationHub />);
     
     await waitFor(() => {
       expect(screen.getByText('HUB')).toBeTruthy();
@@ -110,7 +115,7 @@ describe('NavigationHub Crash Resilience', () => {
     (window as any).aura.getSnippets = vi.fn().mockResolvedValue([]);
     (window as any).aura.listLogs = vi.fn().mockResolvedValue([]);
 
-    render(<NavigationHub />);
+    renderWithRouter(<NavigationHub />);
     
     await waitFor(() => {
       expect(screen.getByText('HUB')).toBeTruthy();
@@ -118,7 +123,7 @@ describe('NavigationHub Crash Resilience', () => {
   });
 
   it('navigates when department tile is clicked', async () => {
-    render(<NavigationHub />);
+    renderWithRouter(<NavigationHub />);
     
     await waitFor(() => {
       const terminalTile = screen.getByText('TERMINAL');
@@ -130,7 +135,7 @@ describe('NavigationHub Crash Resilience', () => {
   it('renders recent strip with no sessions', async () => {
     (window as any).aura.listSessionsV2 = vi.fn().mockResolvedValue([]);
 
-    render(<NavigationHub />);
+    renderWithRouter(<NavigationHub />);
     
     await waitFor(() => {
       expect(screen.getByText('NO SESSIONS YET')).toBeTruthy();
@@ -144,7 +149,7 @@ describe('NavigationHub Crash Resilience', () => {
       { id: '3', name: 'Running Session', state: 'running', token_count: 200 },
     ]);
 
-    render(<NavigationHub />);
+    renderWithRouter(<NavigationHub />);
     
     await waitFor(() => {
       // Check for resumable badges (↻)
@@ -164,7 +169,7 @@ describe('NavigationHub Crash Resilience', () => {
       { id: '5', name: 'Error 1', state: 'error', token_count: 50 },
     ]);
 
-    render(<NavigationHub />);
+    renderWithRouter(<NavigationHub />);
     
     await waitFor(() => {
       // Should show "2 LIVE · 2 DONE" (2 running, 2 done - error is not counted in doneCount)

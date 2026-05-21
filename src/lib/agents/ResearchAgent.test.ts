@@ -17,7 +17,7 @@ describe('ResearchAgent', () => {
     registry = new ProviderRegistry();
     agent = new ResearchAgent(registry);
     // vertex is the primary provider for 'long_context'
-    vi.spyOn(registry, 'getAvailableProviders').mockReturnValue([{ id: 'vertex' } as any]);
+    vi.spyOn(registry, 'getAvailableProviders').mockReturnValue([{ id: 'groq' } as any]);
   });
 
   describe('evaluate()', () => {

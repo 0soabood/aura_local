@@ -69,7 +69,7 @@ export const TOOL_TIER_MAP: Record<string, VetoTier> = {
 };
 
 export const DEFAULT_VETO_CONFIG: VetoConfig = {
-  defaultBehavior: 'require-approval',
+  defaultBehavior: 'auto-approve',
   tierOverrides: {},
   alwaysRequireFor: [],
   neverRequireFor: [],

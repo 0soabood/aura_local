@@ -29,7 +29,7 @@ import { reloadAuraMemory, getAuraMemory } from '../lib/memory/loader';
 import { writeMemoryFn } from '../lib/tools/builtin/write_memory';
 import { broadcastEvent, debugEmitter } from '../lib/debug';
 import db from '../db/connection';
-import { ProviderRegistry } from '../lib/providers/ProviderRegistry';
+import { getSharedRegistryAsync } from '../lib/RegistrySingleton';
 import { hasKey, isUserKey, setUserKey, getMaskedPreview } from '../lib/providers/ByokStore';
 import { getVetoManager } from '../lib/graph/workflow';
 import { DEFAULT_VETO_CONFIG } from '../lib/veto/types';
@@ -57,36 +57,9 @@ function injectionGuard(input: string): { blocked: boolean; reason?: string } {
 }
 // ── ───────────────────────────────────────────────────────────────────
 
-// Cached ProviderRegistry instance (initialized once, reused across requests)
-let cachedRegistry: any = null;
-let registryInitializing: Promise<any> | null = null;
-let registryInitialized = false;
-
-async function getRegistry() {
-  if (cachedRegistry && registryInitialized) return cachedRegistry;
-
-  // Ensure only one initialization happens at a time
-  if (registryInitializing) return registryInitializing;
-
-  registryInitializing = (async () => {
-    const registry = new ProviderRegistry();
-
-    // Wait for async initialization (OpenRouter models) to complete
-    if (registry.waitForInitialization) {
-      await registry.waitForInitialization();
-    } else {
-      // Fallback: wait a reasonable time for async operations
-      await new Promise(resolve => setTimeout(resolve, 500));
-    }
-
-    cachedRegistry = registry;
-    registryInitialized = true;
-    registryInitializing = null;
-    return registry;
-  })();
-
-  return registryInitializing;
-}
+// Cached ProviderRegistry via shared singleton (H1)
+// Initialized once, reused across all consumers.
+export const getRegistry = getSharedRegistryAsync;
 
 /** Parse a query param integer, clamped to [min, max]. Returns null if the value is present but not a valid integer. */
 function parseLimitParam(val: string | undefined, defaultVal = 100, min = 1, max = 500): number | null {
@@ -437,7 +410,15 @@ export function createApiApp(): Express {
       .replace(/\[\w+_agent\]:\s*/g, '')            // [code_agent]:, [research_agent]:, etc.
       .replace(/\[pseudo_vector_[^\]]+\]:\s*/g, '')  // [pseudo_vector_context]:
       .replace(/\[execution_error\]:\s*/g, '')       // [execution_error]:
-      .replace(/\*\*\[[^\]]+\]\*\*:\s*/g, '');       // **[code_agent]**:
+      .replace(/\*\*\[[^\]]+\]\*\*:\s*/g, '')       // **[code_agent]**:
+      // P3-FOLLOW-UP: Strip "**synthesis_agent** produced the following:" and variants
+      .replace(/\*\*\w+_agent\*\*\s+produced\s+the\s+following:\s*/gi, '')
+      .replace(/\w+_agent\s+produced\s+the\s+following:\s*/gi, '')
+      // BUG-5: Strip pseudo-vector content blocks that leaked into output
+      .replace(/## Relevant Files \(Pseudo-Vector Search Results\)[\s\S]*?(?=\n#{1,2}\s|\n\n[A-Z]|$)/gi, '')
+      .replace(/### [^\n]+\nScore:\s*[\d.]+\n````[\s\S]*?````/gi, '')
+      .replace(/Score:\s*[\d.]+/gi, '')
+      .replace(/Found \d+ relevant files:/gi, '');
   }
 
   app.post('/api/sessions', (_req, res) => {
@@ -468,8 +449,17 @@ export function createApiApp(): Express {
   });
 
   app.delete('/api/sessions/:id', (req, res) => {
-    BlackboardEventRepository.deleteSession(req.params.id);
-    OrchestrateSessionRepository.delete(req.params.id);
+    const id = req.params.id;
+    BlackboardEventRepository.deleteSession(id);
+    OrchestrateSessionRepository.delete(id);
+    // Clean up LangGraph checkpoints to prevent orphaned data (C2)
+    try {
+      db.prepare('DELETE FROM checkpoints WHERE thread_id = ?').run(id);
+      db.prepare('DELETE FROM checkpoint_writes WHERE thread_id = ?').run(id);
+      db.prepare('DELETE FROM checkpoint_blobs WHERE thread_id = ?').run(id);
+    } catch (e: any) {
+      console.warn(`[DELETE /api/sessions/${id}] Checkpoint cleanup: ${e.message}`);
+    }
     res.sendStatus(204);
   });
 
@@ -530,6 +520,19 @@ export function createApiApp(): Express {
         
         // Listen for internal broadcasts to stream live ReAct trace
         debugEmitter.on(`debug:${resolvedSessionId}`, handleDebugEvent);
+
+        // C1: On client disconnect, clean up immediately rather than
+        // waiting for the LangGraph execution to complete. This prevents
+        // permanent session locks when a user navigates away or closes
+        // the tab mid-request.
+        const cleanupOnDisconnect = () => {
+          inFlight.delete(resolvedSessionId);
+          if (handleDebugEvent) {
+            debugEmitter.off(`debug:${resolvedSessionId}`, handleDebugEvent);
+          }
+          console.log(`[API] Client disconnected from session ${resolvedSessionId} — cleaned up`);
+        };
+        res.on('close', cleanupOnDisconnect);
       }
 
       // Upsert the session row before executing — title = first 80 chars of message.

@@ -18,10 +18,11 @@ describe('ProviderRegistry', () => {
   });
 
   describe('listProviders()', () => {
-    it('returns OpenRouter as the only built-in provider', () => {
+    it('returns built-in providers (openrouter, groq)', () => {
       const ids = registry.listProviders();
       expect(ids).toContain('openrouter');
-      expect(ids).toHaveLength(1);
+      expect(ids).toContain('groq');
+      expect(ids).toHaveLength(2);
     });
   });
 

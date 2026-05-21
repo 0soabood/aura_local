@@ -5,6 +5,7 @@ import { writeFileDef, writeFileFn } from '../tools/builtin/write_file';
 import { editFileDef, editFileFn } from '../tools/builtin/edit_file';
 import { runCommandDef, runCommandFn } from '../tools/builtin/run_command';
 import { ToolRegistry } from '../tools/registry';
+import type { ReActResult } from '../tools/types';
 import { peekFallbackChain } from '../ModelConfig';
 import { resolveModel } from '../ModelConfig.server';
 import { buildSynthesisPrompt } from '../prompts/AgentWiring';
@@ -80,11 +81,62 @@ export class SynthesisAgent extends BaseAgent {
     return this.bid(0, 'deferring to specialist agents');
   }
 
+  private buildSynthesisToolRegistry(): ToolRegistry {
+    const reg = this.toolRegistry ?? new ToolRegistry();
+    if (!reg.has('write_memory')) reg.register(writeMemoryDef, writeMemoryFn);
+    if (!reg.has('write_file'))  reg.register(writeFileDef,  writeFileFn);
+    if (!reg.has('edit_file'))   reg.register(editFileDef,   editFileFn);
+    if (!reg.has('run_command')) reg.register(runCommandDef,  runCommandFn);
+    return reg;
+  }
+
   async execute(events: BlackboardEvent[], bid: AgentBid): Promise<AgentOutput> {
     // Find the current turn's boundary
     const reversedUserMsgIdx = [...events].reverse().findIndex(e => e.event_type === 'user_message');
     const lastUserIdx = reversedUserMsgIdx >= 0 ? events.length - 1 - reversedUserMsgIdx : -1;
     const currentTurnEvents = lastUserIdx >= 0 ? events.slice(lastUserIdx) : events;
+
+    // --- BUG-NEW-A: Build conversational turn history for follow-up context ---
+    // Extract the last N complete assistant+user turns before the current one
+    // so the LLM can resolve pronouns like "that", "it", "the previous code".
+    const MAX_HISTORY_TURNS = 3;
+    const historyMessages: { role: 'user' | 'assistant'; content: string }[] = [];
+
+    if (lastUserIdx > 0) {
+      // Collect user_message + synthesis_complete pairs from before current turn
+      const priorEvents = events.slice(0, lastUserIdx);
+      const turns: { user?: string; assistant?: string }[] = [];
+      let currentTurn: { user?: string; assistant?: string } = {};
+
+      for (const e of priorEvents) {
+        if (e.event_type === 'user_message') {
+          if (currentTurn.user || currentTurn.assistant) {
+            turns.push(currentTurn);
+            currentTurn = {};
+          }
+          currentTurn.user = e.content;
+        } else if (e.event_type === 'synthesis_complete' && currentTurn.user) {
+          currentTurn.assistant = e.content;
+        }
+      }
+      if (currentTurn.user || currentTurn.assistant) {
+        turns.push(currentTurn);
+      }
+
+      // Take the last N complete turns (must have both user and assistant)
+      const completeTurns = turns
+        .filter(t => t.user && t.assistant)
+        .slice(-MAX_HISTORY_TURNS);
+
+      for (const turn of completeTurns) {
+        historyMessages.push({ role: 'user', content: turn.user! });
+        // Truncate very long assistant responses to avoid context bloat
+        const assistantContent = turn.assistant!.length > 800
+          ? turn.assistant!.slice(0, 800) + '\n\n[... earlier response truncated for brevity ...]'
+          : turn.assistant!;
+        historyMessages.push({ role: 'assistant', content: assistantContent });
+      }
+    }
 
     const agentOutputs = currentTurnEvents.filter(e => e.event_type === 'agent_output' || e.event_type === 'code_written');
     
@@ -133,10 +185,17 @@ export class SynthesisAgent extends BaseAgent {
     // ONLY pass current turn events to buildMessages — prevents history bleed/echo
     const messages = this.buildMessages(currentTurnEvents, SYSTEM_PROMPT);
 
-    // BUG-5: Inject synthesis instruction as a user message after the system prompt
+    // BUG-NEW-A: Prepend conversational history before current turn messages
+    // Insert after system prompt (index 0) so the LLM sees the conversation flow.
+    let insertIdx = 1; // After system prompt
+    if (historyMessages.length > 0) {
+      messages.splice(insertIdx, 0, ...historyMessages);
+      insertIdx += historyMessages.length;
+    }
+
+    // BUG-5: Inject synthesis instruction as a user message before the current turn
     if (synthesisInstruction) {
-      // Insert right after the system message (index 1), before any conversation
-      messages.splice(1, 0, { role: 'user', content: synthesisInstruction });
+      messages.splice(insertIdx, 0, { role: 'user', content: synthesisInstruction });
     }
 
     // Check if bid contains a preferredModel override
@@ -147,35 +206,51 @@ export class SynthesisAgent extends BaseAgent {
       throw new Error('No healthy synthesis provider available.');
     }
 
-    const result = await this.registry.call(
-      model,
-      '',
-      { temperature: 0.0, messages },
-    );
+    const reg = this.buildSynthesisToolRegistry();
 
-    if (result.rateLimited) {
-      const retryHint = result.retryAfterSeconds
-        ? ` Please wait ${result.retryAfterSeconds}s before retrying.`
-        : '';
-      return {
-        event_type: 'escalation_required',
-        content: JSON.stringify({
-          reason: result.errorMessage ?? 'Synthesis API rate limit exceeded.',
-          actionable:
-            `The API quota is exhausted.${retryHint} ` +
-            'Wait for the quota window to reset or configure a paid API key.',
-        }),
-        metadata: {
-          model_id:     result.model,
-          latency_ms:   result.latencyMs,
-          confidence:   bid.confidence,
-          rate_limited: true,
-        },
-      };
+    let reactResult: ReActResult;
+    try {
+      reactResult = await this.runReactLoop(
+        events[0]?.session_id || 'unknown',
+        messages,
+        model,
+        reg.describe(),
+        reg,
+        { temperature: 0.0 },
+      );
+    } catch (err: any) {
+      // runReactLoop throws when all providers fail or hit rate limits
+      const errMsg = err.message ?? String(err);
+      if (errMsg.includes('rate limit') || errMsg.includes('token limit') || errMsg.includes('quota')) {
+        return {
+          event_type: 'escalation_required',
+          content: JSON.stringify({
+            reason: errMsg,
+            actionable: 'The API quota is exhausted. Wait for the quota window to reset or configure a paid API key.',
+          }),
+          metadata: {
+            model_id:   model,
+            latency_ms: 0,
+            confidence: bid.confidence,
+            rate_limited: true,
+          },
+        };
+      }
+      // Re-throw so the orchestrator can append an execution_error event
+      throw err;
     }
 
+    const effectiveResult = {
+      text: reactResult.content,
+      model: reactResult.model,
+      latencyMs: reactResult.latencyMs,
+      tokensIn: reactResult.tokensIn,
+      tokensOut: reactResult.tokensOut,
+      rateLimited: false,
+    };
+
     // Guard against hallucinated echo loops (model outputs its own output repetitively)
-    const rawText = result.text || '';
+    const rawText = effectiveResult.text || '';
     const hasEchoLoop = /(a sequence of ){5,}/i.test(rawText)
       || /((\b\w+\b)(\s+\2){7,})/i.test(rawText);  // same word repeated 8+ times
     if (rawText && hasEchoLoop) {
@@ -190,8 +265,8 @@ export class SynthesisAgent extends BaseAgent {
         event_type: 'synthesis_complete',
         content: summary,
         metadata: {
-          model_id:   result.model,
-          latency_ms: result.latencyMs,
+          model_id:   effectiveResult.model,
+          latency_ms: effectiveResult.latencyMs,
           confidence: bid.confidence,
           echo_loop_fallback: true,
         },
@@ -199,11 +274,35 @@ export class SynthesisAgent extends BaseAgent {
     }
 
     // BUG-5: Trim and strip internal markers like [code_agent]:, [memory_agent]:, [research_agent]:
-    let responseText = (result.text || '').trim();
+    let responseText = (effectiveResult.text || '').trim();
     // Strip leading internal agent markers that the LLM may have echoed back
     responseText = responseText.replace(/^\[(code_agent|memory_agent|research_agent|bureaucracy_agent)\]:\s*/gi, '').trim();
     // Strip any remaining internal markers mid-response
     responseText = responseText.replace(/\[(code_agent|memory_agent|research_agent|bureaucracy_agent)\]:\s*/gi, '').trim();
+
+    // BUG-5: Strip pseudo-vector context leaks (file paths + scores, "Relevant Files" headers)
+    // NOTE: Do NOT strip generic --- markdown blocks here — that overcorrects and strips
+    // legitimate Code agent output that uses horizontal rules as section separators.
+    // The input-side fix (types.ts skipping code_context_retrieved) prevents pseudo-vector
+    // content from reaching the LLM prompt in the first place.
+    responseText = responseText
+      .replace(/## Relevant Files \(Pseudo-Vector Search Results\)[\s\S]*?(?=\n#{1,2}\s|\n\n[A-Z]|$)/gi, '')
+      .replace(/### [^\n]+\nScore:\s*[\d.]+\n````[\s\S]*?````/gi, '')
+      .replace(/Score:\s*[\d.]+/gi, '')
+      .replace(/Found \d+ relevant files:/gi, '')
+      .trim();
+
+    // P3: Surface memory-update transparency — if BureaucracyAgent recorded a preference
+    // change, prepend the diff notation so the user sees it even if the LLM doesn't echo it.
+    const memoryUpdateEvent = currentTurnEvents.find(
+      e => e.author === 'bureaucracy_agent' && e.content?.includes('🔄 **Updated memory:**')
+    );
+    if (memoryUpdateEvent) {
+      const updateLine = memoryUpdateEvent.content.match(/🔄 \*\*Updated memory:\*\* .+/)?.[0] ?? '';
+      if (updateLine) {
+        responseText = `${updateLine}\n\n${responseText}`;
+      }
+    }
 
     if (!responseText) {
       // BUG-5: Defensive fallback — graceful fallback with raw agent outputs
@@ -225,11 +324,7 @@ export class SynthesisAgent extends BaseAgent {
     }
 
     // Persist a one-sentence summary to USER.md — best-effort, never crashes synthesis.
-    const memReg = this.toolRegistry ?? new ToolRegistry();
-    if (!memReg.has('write_memory')) memReg.register(writeMemoryDef, writeMemoryFn);
-    if (!memReg.has('write_file')) memReg.register(writeFileDef, writeFileFn);
-    if (!memReg.has('edit_file')) memReg.register(editFileDef, editFileFn);
-    if (!memReg.has('run_command')) memReg.register(runCommandDef, runCommandFn);
+    const memReg = this.buildSynthesisToolRegistry();
     const summary = responseText.slice(0, 200).replace(/\n/g, ' ').trim();
     if (summary) {
       memReg.execute({
@@ -246,12 +341,12 @@ export class SynthesisAgent extends BaseAgent {
       event_type: 'synthesis_complete',
       content:    responseText,
       metadata: {
-        model_id:   result.model,
-        latency_ms: result.latencyMs,
+        model_id:   effectiveResult.model,
+        latency_ms: effectiveResult.latencyMs,
         confidence: bid.confidence,
         mode:       agentOutputs.length > 0 ? 'synthesis' : 'conversational',
-        tokens_in:  result.tokensIn,
-        tokens_out: result.tokensOut,
+        tokens_in:  effectiveResult.tokensIn,
+        tokens_out: effectiveResult.tokensOut,
       },
     };
   }

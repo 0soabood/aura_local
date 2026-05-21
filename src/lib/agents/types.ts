@@ -33,11 +33,15 @@ export interface ReactiveAgent {
   execute(events: BlackboardEvent[], bid: AgentBid): Promise<AgentOutput>;
 }
 
-const MAX_REACT_STEPS = 5;
-
 /** All concrete agents receive the shared registry at construction time. */
 export abstract class BaseAgent implements ReactiveAgent {
   abstract readonly name: AgentName;
+
+  /**
+   * Maximum ReAct loop iterations before forcing a final answer.
+   * Override in subclasses to set agent-specific limits (e.g. 10 for ResearchAgent).
+   */
+  protected maxIterations = 5;
 
   constructor(
     protected readonly registry: ProviderRegistry,
@@ -105,8 +109,15 @@ export abstract class BaseAgent implements ReactiveAgent {
         messages.push({ role: 'user', content: e.content });
       } else if (e.event_type === 'synthesis_complete') {
         messages.push({ role: 'assistant', content: e.content });
-      } else if (isCurrentTurn && (e.event_type === 'agent_output' || e.event_type === 'code_written' || e.event_type === 'code_context_retrieved')) {
+      } else if (isCurrentTurn && (e.event_type === 'agent_output' || e.event_type === 'code_written')) {
         messages.push({ role: 'assistant', content: `[${e.author}]: ${e.content}` });
+      } else if (isCurrentTurn && e.event_type === 'code_context_retrieved') {
+        // Pseudo-vector context: inject as a system note so the LLM can read it
+        // but it's clearly marked as internal — not part of the conversation.
+        messages.push({
+          role: 'system',
+          content: `[INTERNAL CONTEXT — DO NOT OUTPUT THIS IN YOUR RESPONSE]:\n${e.content}`,
+        });
       } else if (isCurrentTurn && e.event_type === 'execution_error') {
         messages.push({ role: 'user', content: `[system — execution error from ${e.author}]: ${e.content}` });
       }
@@ -146,13 +157,13 @@ export abstract class BaseAgent implements ReactiveAgent {
   }
 
   /**
-   * Bounded ReAct loop: Reason → Act → Observe, up to MAX_REACT_STEPS times.
+   * Bounded ReAct loop: Reason → Act → Observe, up to this.maxIterations times.
    *
    * On each step the LLM is called with the current message history and the
    * provided tool definitions. If the LLM produces tool calls, each is
    * executed via the registry and the results are appended to the conversation
    * before the next step. The loop exits when the LLM produces a response with
-   * no tool calls, or when MAX_REACT_STEPS is reached (forcing a final answer).
+   * no tool calls, or when this.maxIterations is reached (forcing a final answer).
    *
    * Tool results are injected in the OpenAI tool-message format so that
    * OpenAI-compatible providers (Groq, OpenRouter, etc.) maintain a valid
@@ -172,8 +183,8 @@ export abstract class BaseAgent implements ReactiveAgent {
     let totalLatency   = 0;
     let lastModel      = model;
 
-    for (let step = 0; step < MAX_REACT_STEPS; step++) {
-      broadcastEvent(sessionId, { event_type: 'react_think', author: this.name, content: `Reasoning step ${step + 1}/${MAX_REACT_STEPS} with ${model}...` });
+    for (let step = 0; step < this.maxIterations; step++) {
+      broadcastEvent(sessionId, { event_type: 'react_think', author: this.name, content: `Reasoning step ${step + 1}/${this.maxIterations} with ${model}...` });
 
       let result = await this.registry.call(model, '', {
         temperature: opts.temperature,
@@ -254,8 +265,51 @@ export abstract class BaseAgent implements ReactiveAgent {
       }
     }
 
+    console.log(`[ReAct] maxIterations (${this.maxIterations}) hit for ${this.name}. localMessages count: ${localMessages.length}. Forcing final answer...`);
+    broadcastEvent(sessionId, { event_type: 'react_observe', author: this.name, content: `Max reasoning steps reached. Forcing final answer...` });
+
+    // Force one more LLM call without tools to get a final answer
+    try {
+      const finalResult = await this.registry.call(lastModel, 'Force final answer after max ReAct steps', {
+        temperature: opts.temperature ?? 0.3,
+        messages: [...localMessages, {
+          role: 'user',
+          content: 'You have reached the maximum number of reasoning steps. Provide your final answer now based on all the information gathered. Do NOT call any more tools. Give the best answer you can.'
+        }],
+      });
+
+      // Validate the response: must be a non-empty string with actual content
+      const responseText = (finalResult.text || '').trim();
+      if (responseText && responseText.length > 5) {
+        totalTokensIn  += finalResult.tokensIn;
+        totalTokensOut += finalResult.tokensOut;
+        totalLatency   += finalResult.latencyMs;
+
+        broadcastEvent(sessionId, { event_type: 'react_observe', author: this.name, content: `Forced final answer generated (${responseText.length} chars).` });
+        return {
+          content:    responseText,
+          model:      finalResult.model || lastModel,
+          latencyMs:  totalLatency,
+          tokensIn:   totalTokensIn,
+          tokensOut:  totalTokensOut,
+        };
+      }
+
+      console.warn(`[ReAct] Forced call returned insufficient content: "${responseText.slice(0, 100)}"`);
+    } catch (err: any) {
+      console.error(`[ReAct] Forced final answer call failed:`, err.message);
+    }
+
+    // Ultimate fallback: summarize what tools were called
+    const toolNames = localMessages
+      .filter((m: any) => m.role === 'tool')
+      .map((m: any) => m.name)
+      .filter(Boolean);
+
     return {
-      content:    '',
+      content:    toolNames.length
+        ? `Research completed using tools: ${toolNames.join(', ')}. Unable to synthesize final answer.`
+        : 'Research completed but no final answer was generated.',
       model:      lastModel,
       latencyMs:  totalLatency,
       tokensIn:   totalTokensIn,

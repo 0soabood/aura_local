@@ -220,8 +220,6 @@ export type AgentName =
   | 'code_agent'
   | 'synthesis_agent'
   | 'bureaucracy_agent'
-  | 'etsy_agent'
-  | 'funding_agent'
   | 'orchestrator'
   | 'user'
   | string;

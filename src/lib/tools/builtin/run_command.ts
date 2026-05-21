@@ -12,8 +12,6 @@ export const ALLOWED_PREFIXES = [
   'tsc --noEmit',
   'git diff',
   'git status',
-  'git add',
-  'git commit -m',
 ];
 
 export function isAllowed(command: string): boolean {
@@ -37,7 +35,7 @@ export const runCommandDef: ToolDefinition = {
     description:
       'Run a whitelisted shell command from the project root and return its output. ' +
       'Allowed commands: npm test, npm run build, npm run lint, tsc --noEmit, ' +
-      'git diff, git status, git add, git commit -m "...".',
+      'git diff, git status.',
     parameters: {
       type: 'object',
       properties: {

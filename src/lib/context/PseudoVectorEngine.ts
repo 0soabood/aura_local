@@ -10,7 +10,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
-import { execSync } from 'child_process';
+import { promises as fsp } from 'fs';
 
 interface FileScore {
   filePath: string;
@@ -145,22 +145,22 @@ export async function searchRelevantFiles(
   const files: string[] = [];
   const allContent: string[][] = [];
   
-  function walkDir(dir: string) {
+  async function walkDir(dir: string) {
     try {
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      const entries = await fsp.readdir(dir, { withFileTypes: true });
       for (const entry of entries) {
         const fullPath = path.join(dir, entry.name);
         
         if (entry.isDirectory()) {
           if (!opts.excludeDirs.includes(entry.name) && !entry.name.startsWith('.')) {
-            walkDir(fullPath);
+            await walkDir(fullPath);
           }
         } else if (entry.isFile()) {
           const ext = path.extname(entry.name);
           if (opts.fileTypes.includes(ext)) {
             files.push(fullPath);
             try {
-              const content = fs.readFileSync(fullPath, 'utf-8');
+              const content = await fsp.readFile(fullPath, 'utf-8');
               allContent.push(tokenize(content));
             } catch {
               allContent.push([]);
@@ -169,31 +169,31 @@ export async function searchRelevantFiles(
         }
       }
     } catch (err) {
-      // Skip directories we can't read
+      console.warn(`[PseudoVectorEngine] Skipping unreadable directory: ${dir}`, err);
     }
   }
   
-  walkDir(rootDir);
+  await walkDir(rootDir);
   
   // Score each file
   const scoredFiles: FileScore[] = [];
   
-  for (let i = 0; i < files.length; i++) {
+  await Promise.all(files.map(async (filePath) => {
     try {
-      const content = fs.readFileSync(files[i], 'utf-8');
-      const score = scoreFile(queryTokens, content, files[i], allContent);
+      const content = await fsp.readFile(filePath, 'utf-8');
+      const score = scoreFile(queryTokens, content, filePath, allContent);
       
       if (score > 0) {
         scoredFiles.push({
-          filePath: files[i],
+          filePath,
           score,
           preview: getPreview(content, queryTokens, opts.contextWindow),
         });
       }
-    } catch {
-      // Skip files we can't read
+    } catch (err) {
+      console.warn(`[PseudoVectorEngine] Skipping unreadable file: ${filePath}`, err);
     }
-  }
+  }));
   
   // Sort by score descending and return top N
   scoredFiles.sort((a, b) => b.score - a.score);

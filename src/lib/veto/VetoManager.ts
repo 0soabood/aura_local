@@ -19,6 +19,8 @@ import { broadcastEvent } from '../debug';
 export class VetoManager {
   private config: VetoConfig;
   private pendingActions = new Map<string, VetoAction>();
+  private approvedActions = new Map<string, VetoAction>(); // track previously approved tools
+  private approvedOverrides = new Map<string, Record<string, unknown>>(); // original key → modified args
   private sessionId: string;
 
   constructor(sessionId: string, config?: Partial<VetoConfig>) {
@@ -41,6 +43,34 @@ export class VetoManager {
     args: Record<string, unknown>,
     resumeCommand?: { resume: unknown }
   ): Promise<VetoAction | null> {
+    // If this tool was already approved in this session, reuse the approval
+    const approvedKey = `${toolName}:${JSON.stringify(args)}`;
+    if (this.approvedActions.has(approvedKey)) {
+      const existing = this.approvedActions.get(approvedKey)!;
+      existing.status = 'approved';
+      this.broadcastActionUpdate(existing);
+      return existing;
+    }
+
+    // If this tool has a pending override (modified args approved), apply it
+    const overrideArgs = this.approvedOverrides.get(approvedKey);
+    if (overrideArgs) {
+      const action: VetoAction = {
+        id: `action_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+        toolName,
+        toolArgs: overrideArgs,
+        tier: getToolTier(toolName, this.config),
+        status: 'approved',
+        timestamp: Date.now(),
+        description: describeAction(toolName, overrideArgs),
+      };
+      // Move from overrides to permanent approvedActions so future calls also pass
+      this.approvedActions.set(`${toolName}:${JSON.stringify(overrideArgs)}`, action);
+      this.approvedOverrides.delete(approvedKey);
+      this.broadcastActionUpdate(action);
+      return action;
+    }
+
     const action: VetoAction = {
       id: `action_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
       toolName,
@@ -87,6 +117,9 @@ export class VetoManager {
 
     action.status = 'approved';
     this.pendingActions.delete(actionId);
+    // Store in approved actions so future calls for the same tool+args are auto-approved
+    const key = `${action.toolName}:${JSON.stringify(action.toolArgs)}`;
+    this.approvedActions.set(key, action);
     this.broadcastActionUpdate(action);
 
     return action;
@@ -118,11 +151,18 @@ export class VetoManager {
     const action = this.pendingActions.get(actionId);
     if (!action) return null;
 
+    const originalArgs = { ...action.toolArgs };
     action.toolArgs = modifiedArgs;
     action.status = 'modified';
     action.description = describeAction(action.toolName, modifiedArgs);
     action.metadata = { ...action.metadata, reviewerNotes: notes };
     this.pendingActions.delete(actionId);
+    // Store override so the graph can re-execute with modified args on resume
+    const originalKey = `${action.toolName}:${JSON.stringify(originalArgs)}`;
+    this.approvedOverrides.set(originalKey, modifiedArgs);
+    // Also store with modified args so future calls with those args are auto-approved
+    const key = `${action.toolName}:${JSON.stringify(modifiedArgs)}`;
+    this.approvedActions.set(key, action);
     this.broadcastActionUpdate(action);
 
     return action;
@@ -162,6 +202,12 @@ export class VetoManager {
       if (action.timestamp < oneHourAgo) {
         this.pendingActions.delete(id);
       }
+    }
+    // Also clean stale overrides (use same timestamp heuristic on keys)
+    // We don't store timestamps in overrides, so we clear them when
+    // no pending actions remain to avoid indefinite memory growth.
+    if (this.pendingActions.size === 0) {
+      this.approvedOverrides.clear();
     }
   }
 }

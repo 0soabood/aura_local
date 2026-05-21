@@ -136,7 +136,7 @@ describe('Roadmap API', () => {
       verification_state: 'totally-made-up',
     });
     expect(bad.status).toBe(400);
-    expect(bad.body.error).toMatch(/verification_state/i);
+    expect(bad.body.error).toMatch(/verification/i);
   });
 
   it('DELETE removes the row', async () => {

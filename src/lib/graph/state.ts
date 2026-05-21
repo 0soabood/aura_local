@@ -17,10 +17,11 @@ export const AuraStateSchema = Annotation.Root({
 
   // 2. Active Context Window / Ephemeral Scratchpad
   // Raw tool calls, reasoning traces, and filesystem outputs live here.
-  // The overwrite reducer allows the Synthesis node to intentionally
-  // wipe this clean at the end of a turn to prevent context rot.
+  // The reducer appends items (concat mode) so specialists can accumulate
+  // tool outputs during a turn. Returning taskWorkspace: [] explicitly
+  // clears it (used by compactionNode to wipe after synthesis).
   taskWorkspace: Annotation<BaseMessage[]>({
-    reducer: (state, update) => update, // Explicit Overwrite primitive
+    reducer: (state, update) => update.length === 0 && state.length > 0 ? [] : [...state, ...update],
     default: () => [],
   }),
 

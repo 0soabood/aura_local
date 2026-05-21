@@ -17,8 +17,8 @@ describe('CodeAgent', () => {
   beforeEach(() => {
     registry = new ProviderRegistry();
     agent = new CodeAgent(registry);
-    // vertex is in ModelConfig for 'daily_driver'
-    vi.spyOn(registry, 'getAvailableProviders').mockReturnValue([{ id: 'vertex' } as any]);
+    // daily_driver primary is groq:llama-3.3-70b-versatile — mock must include 'groq'
+    vi.spyOn(registry, 'getAvailableProviders').mockReturnValue([{ id: 'groq' } as any]);
   });
 
   describe('evaluate()', () => {
@@ -81,7 +81,7 @@ describe('CodeAgent', () => {
         async () => 'Found: src/utils/sort.ts',
       );
       agent = new CodeAgent(registry, mockRegistry);
-      vi.spyOn(registry, 'getAvailableProviders').mockReturnValue([{ id: 'vertex' } as any]);
+      vi.spyOn(registry, 'getAvailableProviders').mockReturnValue([{ id: 'groq' } as any]);
 
       vi.spyOn(registry, 'call')
         // Step 1: LLM calls the search_codebase tool
@@ -119,7 +119,7 @@ describe('CodeAgent', () => {
         async () => 'Error: ENOENT no such file',
       );
       agent = new CodeAgent(registry, mockRegistry);
-      vi.spyOn(registry, 'getAvailableProviders').mockReturnValue([{ id: 'vertex' } as any]);
+      vi.spyOn(registry, 'getAvailableProviders').mockReturnValue([{ id: 'groq' } as any]);
 
       vi.spyOn(registry, 'call')
         .mockResolvedValueOnce({

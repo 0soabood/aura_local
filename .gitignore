@@ -23,3 +23,7 @@ dist-main/
 keys/
 __mocks__/
 *.env
+
+# Local env-specific scripts
+start.sh
+hello_world.py

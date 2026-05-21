@@ -1,8 +1,10 @@
-import { ProviderRegistry } from './providers/ProviderRegistry';
+import { getSharedRegistry } from './RegistrySingleton';
+import type { ProviderRegistry } from './providers/ProviderRegistry';
 import { ReactiveAgent } from './agents/types';
 import { ResearchAgent } from './agents/ResearchAgent';
 import { CodeAgent } from './agents/CodeAgent';
 import { SynthesisAgent } from './agents/SynthesisAgent';
+import { BureaucracyAgent } from './agents/BureaucracyAgent';
 import { ToolRegistry } from './tools/registry';
 import { getFileSkeletonDef, getFileSkeletonFn, searchCodebaseDef, searchCodebaseFn } from './context/ContextTools';
 import { readFileDef, readFileFn } from './tools/builtin/read_file';
@@ -97,7 +99,7 @@ export class ReactiveOrchestrator {
   private readonly registry: ProviderRegistry;
 
   constructor() {
-    this.registry = new ProviderRegistry();
+    this.registry = getSharedRegistry();
 
     const toolRegistry = new ToolRegistry()
       .register(getFileSkeletonDef, getFileSkeletonFn)
@@ -113,6 +115,7 @@ export class ReactiveOrchestrator {
       new ResearchAgent(this.registry, toolRegistry),
       new CodeAgent(this.registry, toolRegistry),
       new SynthesisAgent(this.registry, toolRegistry),
+      new BureaucracyAgent(this.registry, toolRegistry),
     ];
   }
 
@@ -171,10 +174,12 @@ export class ReactiveOrchestrator {
       const lastUserMsg = currentTurnEvents.find(e => e.event_type === 'user_message')?.content ?? '';
 
       // --- Synthesis guard ---
-      // Synthesis is ONLY allowed to win when:
-      //   a) It's a genuine greeting/identity question (conversational fallback), OR
-      //   b) A specialist has already produced output AND no specialist has a live bid
-      //      above threshold this loop (i.e., it acts as a final formatter, never a competitor).
+  // Synthesis is ONLY allowed to win when:
+  //   a) It's a genuine greeting/identity question (conversational fallback), OR
+  //   b) A specialist has already produced output AND no specialist has a live bid
+  //      above threshold (i.e., it acts as a final formatter, never a competitor), OR
+  //   c) No specialist agent bid at all — conversational fallback so the user
+  //      gets a response instead of "Workflow ended without generating a response."
       const synthIdx = rawBids.findIndex(b => b.agentName === 'synthesis_agent');
       if (synthIdx !== -1) {
         const synthBid = rawBids[synthIdx];
@@ -186,10 +191,15 @@ export class ReactiveOrchestrator {
         );
         // Allow Mode 1 (0.90) only when a specialist has finished AND no specialist is competing now.
         // Allow Mode 2 (0.40) only for genuine greetings.
+        // Allow Mode 3 (conversational fallback) when no specialist agent is bidding at all.
         // In all other cases, clamp to 0.
         const allowMode1 = synthBid.confidence >= 0.85 && specialistOutputExists && !specialistBiddingNow;
         const allowMode2 = synthBid.confidence < 0.85 && isSynthesisGreeting(lastUserMsg);
-        if (!allowMode1 && !allowMode2) {
+        const specialistBidding = rawBids.some(
+          b => b.agentName !== 'synthesis_agent' && b.confidence >= WINNER_CONFIDENCE_THRESHOLD,
+        );
+        const allowMode3 = synthBid.confidence < 0.85 && !specialistBidding && !specialistOutputExists;
+        if (!allowMode1 && !allowMode2 && !allowMode3) {
           rawBids[synthIdx] = { ...synthBid, confidence: 0 };
         }
       }

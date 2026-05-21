@@ -59,15 +59,17 @@ describe('ChatMessage', () => {
     render(<ChatMessage event={event} />);
     
     expect(screen.getByText('Something went wrong')).toBeTruthy();
-    expect(screen.getByText('Agent Escalation')).toBeTruthy();
+    expect(screen.getByText('AGENT ESCALATION')).toBeTruthy();
     expect(screen.getByTestId('alert-icon')).toBeTruthy();
   });
 
-  it('returns null for non-displayable events', () => {
+  it('renders internal events as collapsed chips', () => {
     const event = createEvent('agent_output', 'Internal thought');
     const { container } = render(<ChatMessage event={event} />);
     
-    expect(container.firstChild).toBeNull();
+    // Internal events render as status chips, not null
+    expect(container.firstChild).not.toBeNull();
+    expect(screen.getByText('agent output')).toBeTruthy();
   });
 
   it('memoizes correctly - does not re-render with same props', () => {

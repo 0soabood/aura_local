@@ -15,6 +15,32 @@ import type {
   ProviderResult,
 } from './types';
 import { getOpenRouterProviderSync, createOpenRouterProvider } from './OpenRouterProvider';
+import { getGroqProviderSync, createGroqProvider } from './GroqProvider';
+import { hasKey, resolveKey, isUserKey } from './ByokStore';
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Race a promise against a timeout.  If the timeout fires first the returned
+ * promise rejects with an informative error.  No special cleanup is needed —
+ * the rejected timeout callback is a no-op if the original promise settles
+ * first (JavaScript ignores rejections on already-settled promises).
+ */
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  label = 'LLM call',
+): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(
+        `[Timeout] ${label} timed out after ${ms}ms — ` +
+        `the provider may be overloaded or the free-tier rate limit is too slow.`,
+      )), ms),
+    ),
+  ]);
+}
 
 // ── Provider config ────────────────────────────────────────────────────────
 
@@ -52,7 +78,7 @@ export interface ProviderConfig {
   notes?: string;
 }
 
-const PROVIDER_CONFIGS: ProviderConfig[] = [getOpenRouterProviderSync()];
+const PROVIDER_CONFIGS: ProviderConfig[] = [getOpenRouterProviderSync(), getGroqProviderSync()];
 
 // ── Re-export legacy types so existing imports from ProviderRegistry still compile ──
 
@@ -83,19 +109,19 @@ export class ProviderRegistry {
   private initializationPromise: Promise<void>;
 
   constructor() {
-    // Initialize with sync configs first (including OpenRouter sync version)
+    // Initialize with sync configs first (including OpenRouter + Groq sync versions)
     this.providerConfigs = [...PROVIDER_CONFIGS];
 
     for (const cfg of this.providerConfigs) {
       this.usageLog.set(cfg.id, []);
     }
 
-    // Asynchronously update OpenRouter models if API key is available
-    this.initializationPromise = this.updateOpenRouterModels();
+    // Asynchronously update provider models if API keys are available
+    this.initializationPromise = this.updateProviderModels();
   }
 
   /**
-   * Wait for async initialization (OpenRouter model fetching) to complete.
+   * Wait for async initialization (model fetching) to complete.
    * This is useful when you need the full model list before proceeding.
    */
   async waitForInitialization(): Promise<void> {
@@ -103,9 +129,10 @@ export class ProviderRegistry {
   }
 
   /**
-   * Update OpenRouter provider with dynamically fetched models
+   * Update all providers with dynamically fetched models
    */
-  private async updateOpenRouterModels(): Promise<void> {
+  private async updateProviderModels(): Promise<void> {
+    // Update OpenRouter
     try {
       const openRouterConfig = await createOpenRouterProvider();
       const index = this.providerConfigs.findIndex(cfg => cfg.id === 'openrouter');
@@ -115,6 +142,18 @@ export class ProviderRegistry {
       }
     } catch (error) {
       console.error('[ProviderRegistry] Failed to update OpenRouter models:', error);
+    }
+
+    // Update Groq
+    try {
+      const groqConfig = await createGroqProvider();
+      const index = this.providerConfigs.findIndex(cfg => cfg.id === 'groq');
+      if (index >= 0) {
+        this.providerConfigs[index] = groqConfig;
+        console.log(`[ProviderRegistry] Updated Groq with ${groqConfig.models.length} models`);
+      }
+    } catch (error) {
+      console.error('[ProviderRegistry] Failed to update Groq models:', error);
     }
   }
 
@@ -156,8 +195,8 @@ export class ProviderRegistry {
    * If `preferred` is given and available, it is placed first regardless of usage.
    */
   getAllProviders(preferred?: string): ProviderConfig[] {
-    const withKeys = this.providerConfigs.filter(cfg => !!process.env[cfg.envKey]);
-    const withoutKeys = this.providerConfigs.filter(cfg => !process.env[cfg.envKey]);
+    const withKeys = this.providerConfigs.filter(cfg => hasKey(cfg.id, cfg.envKey));
+    const withoutKeys = this.providerConfigs.filter(cfg => !hasKey(cfg.id, cfg.envKey));
 
     // Sort providers with keys by load
     withKeys.sort((a, b) => {
@@ -188,7 +227,7 @@ export class ProviderRegistry {
    * (Kept for backward compatibility with agents)
    */
   getAvailableProviders(preferred?: string): ProviderConfig[] {
-    const available = this.providerConfigs.filter(cfg => !!process.env[cfg.envKey]);
+    const available = this.providerConfigs.filter(cfg => hasKey(cfg.id, cfg.envKey));
 
     available.sort((a, b) => {
       const aLoad = this.recentCallCount(a.id, a.rpm) / a.rpm;
@@ -197,7 +236,7 @@ export class ProviderRegistry {
     });
 
     if (preferred) {
-      const prefId = preferred.includes(':') ? preferred.split(':') : preferred;
+      const prefId = preferred.includes(':') ? preferred.split(':')[0] : preferred;
       const idx = available.findIndex(c => c.id === prefId);
       if (idx > 0) {
         const [p] = available.splice(idx, 1);
@@ -229,6 +268,7 @@ export class ProviderRegistry {
     prompt: string,
     opts: CallOptions = {},
   ): Promise<ProviderResult> {
+    const timeoutMs = opts.timeoutMs ?? 30_000;
     const { providerId, modelId } = this.parseRouting(routing);
     const cfg = this.providerConfigs.find(c => c.id === providerId);
 
@@ -241,11 +281,15 @@ export class ProviderRegistry {
           `Known: ${this.providerConfigs.map(c => c.id).join(', ')}`,
         );
       }
-      const r = await adapter.call(modelId, prompt, opts);
+      const r = await withTimeout(
+        adapter.call(modelId, prompt, opts),
+        timeoutMs,
+        `legacy:${providerId}:${modelId}`,
+      );
       return { ...r, provider: providerId, rateLimited: r.rateLimited ?? false };
     }
 
-    const apiKey = process.env[cfg.envKey] ?? '';
+    const apiKey = resolveKey(cfg.id, cfg.envKey);
     if (!apiKey) {
       throw new Error(`[ProviderRegistry] ${cfg.envKey} is not set for provider "${providerId}"`);
     }
@@ -260,15 +304,19 @@ export class ProviderRegistry {
     this.logUsage(providerId);
     this.debugOutboundMessages(`call:${providerId}:${modelId}`, messages);
 
-    const result = await callProvider(modelId, messages, {
-      format:      cfg.format,
-      baseUrl:     cfg.baseUrl,
-      apiKey,
-      providerId,
-      temperature: opts.temperature,
-      maxTokens:   opts.maxTokens,
-      tools:       opts.tools,
-    });
+    const result = await withTimeout(
+      callProvider(modelId, messages, {
+        format:      cfg.format,
+        baseUrl:     cfg.baseUrl,
+        apiKey,
+        providerId,
+        temperature: opts.temperature,
+        maxTokens:   opts.maxTokens,
+        tools:       opts.tools,
+      }),
+      timeoutMs,
+      `${providerId}:${modelId}`,
+    );
 
     return { ...result, provider: providerId, rateLimited: result.rateLimited };
   }
@@ -286,6 +334,7 @@ export class ProviderRegistry {
     prompt: string,
     opts: CallOptions & { preferred?: string } = {},
   ): Promise<ProviderResult & { skipped: string[] }> {
+    const timeoutMs = opts.timeoutMs ?? 30_000;
     const providers = this.getAvailableProviders(opts.preferred);
 
     if (providers.length === 0) {
@@ -295,7 +344,7 @@ export class ProviderRegistry {
     const skipped: string[] = [];
 
     for (const cfg of providers) {
-      const apiKey = process.env[cfg.envKey] ?? '';
+      const apiKey = resolveKey(cfg.id, cfg.envKey);
 
       // Honor pre-built messages array when provided; otherwise build from prompt + systemPrompt.
       const messages: CallerMessage[] = opts.messages
@@ -314,14 +363,18 @@ export class ProviderRegistry {
         : cfg.defaultModel;
 
       try {
-        const result = await callProvider(targetModel, messages, {
-          format:      cfg.format,
-          baseUrl:     cfg.baseUrl,
-          apiKey,
-          providerId:  cfg.id,
-          temperature: opts.temperature,
-          maxTokens:   opts.maxTokens,
-        });
+        const result = await withTimeout(
+          callProvider(targetModel, messages, {
+            format:      cfg.format,
+            baseUrl:     cfg.baseUrl,
+            apiKey,
+            providerId:  cfg.id,
+            temperature: opts.temperature,
+            maxTokens:   opts.maxTokens,
+          }),
+          timeoutMs,
+          `${cfg.id}:${targetModel}`,
+        );
 
         if (result.rateLimited || !result.text) {
           const reason = result.errorMessage ?? `${cfg.id} returned no content`;
@@ -355,11 +408,11 @@ export class ProviderRegistry {
 
   // ── Health check ──────────────────────────────────────────────────────────
 
-  /** Returns a map of providerId → whether an API key is configured. */
+  /** Returns a map of providerId → whether an API key is configured (BYOK or env). */
   async healthCheck(): Promise<Record<string, boolean>> {
     const result: Record<string, boolean> = {};
     for (const cfg of this.providerConfigs) {
-      result[cfg.id] = !!process.env[cfg.envKey];
+      result[cfg.id] = hasKey(cfg.id, cfg.envKey);
     }
     // Also include any legacy adapters registered via register().
     for (const [id, adapter] of this.legacyAdapters) {

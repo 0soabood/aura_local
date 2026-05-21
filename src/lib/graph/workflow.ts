@@ -6,7 +6,7 @@ import { ResearchAgent } from '../agents/ResearchAgent';
 import { CodeAgent } from '../agents/CodeAgent';
 import { SynthesisAgent } from '../agents/SynthesisAgent';
 import { BureaucracyAgent } from '../agents/BureaucracyAgent';
-import { ProviderRegistry } from '../providers/ProviderRegistry';
+import { getSharedRegistry } from '../RegistrySingleton';
 import { ToolRegistry } from '../tools/registry';
 import { writeMemoryDef, writeMemoryFn } from '../tools/builtin/write_memory';
 import { getFileSkeletonDef, getFileSkeletonFn, searchCodebaseDef, searchCodebaseFn } from '../context/ContextTools';
@@ -84,8 +84,8 @@ function resolveModelForAgent(
   return undefined; // Let the agent use its default
 }
 
-// Initialize isolated registries for the graph prototype
-const registry = new ProviderRegistry();
+// Initialize shared registries for the graph
+const registry = getSharedRegistry();
 const toolRegistry = new ToolRegistry()
   .register(getFileSkeletonDef, getFileSkeletonFn)
   .register(searchCodebaseDef,  searchCodebaseFn)
@@ -123,7 +123,16 @@ function sanitizeAgentOutput(text: string): string {
     .replace(/\[\w+_agent\]:\s*/g, '')            // [code_agent]:, [research_agent]:, [synthesis_agent]:, [bureaucracy_agent]:
     .replace(/\[pseudo_vector_[^\]]+\]:\s*/g, '')  // [pseudo_vector_context]:
     .replace(/\[execution_error\]:\s*/g, '')       // [execution_error]:
-    .replace(/\*\*\[[^\]]+\]\*\*:\s*/g, '');       // **[code_agent]**:
+    .replace(/\*\*\[[^\]]+\]\*\*:\s*/g, '')       // **[code_agent]**:
+    // P3-FOLLOW-UP: Strip "**synthesis_agent** produced the following:" and variants
+    .replace(/\*\*\w+_agent\*\*\s+produced\s+the\s+following:\s*/gi, '')
+    .replace(/\w+_agent\s+produced\s+the\s+following:\s*/gi, '')
+    // BUG-5: Strip pseudo-vector content blocks that leaked into output
+    .replace(/## Relevant Files \(Pseudo-Vector Search Results\)[\s\S]*?(?=\n#{1,2}\s|\n\n[A-Z]|$)/gi, '')
+    .replace(/### [^\n]+\nScore:\s*[\d.]+\n````[\s\S]*?````/gi, '')
+    .replace(/Score:\s*[\d.]+/gi, '')
+    .replace(/Found \d+ relevant files:/gi, '')
+    .trim();
 }
 
 /**
@@ -148,20 +157,23 @@ function stateToEvents(chatHistory: BaseMessage[], workspace: BaseMessage[]): Bl
         author = 'code_agent';
         event_type = 'code_written';
         content = content.replace(/^\[code_agent\]:\s*/, '');
-      }
-      if (content.startsWith('[research_agent]')) {
+      } else if (content.startsWith('[research_agent]')) {
         author = 'research_agent';
         content = content.replace(/^\[research_agent\]:\s*/, '');
-      }
-      if (content.startsWith('[synthesis_agent]')) {
+      } else if (content.startsWith('[synthesis_agent]')) {
         author = 'synthesis_agent';
         event_type = 'synthesis_complete';
         content = content.replace(/^\[synthesis_agent\]:\s*/, '');
-      }
-      if (content.startsWith('[execution_error]')) {
+      } else if (content.startsWith('[execution_error]')) {
         author = 'orchestrator'; // Errors are attributed to the system
         event_type = 'execution_error';
         content = content.replace(/^\[execution_error\]:\s*/, '');
+      } else if (content.startsWith('[pseudo_vector_context]')) {
+        // Pseudo-vector context is internal data, not an agent output.
+        // Map it to a special event type that buildMessages will skip.
+        author = 'orchestrator';
+        event_type = 'code_context_retrieved';
+        content = content.replace(/^\[pseudo_vector_context\]:\s*/, '');
       }
 
       events.push({ id: 0, seq: 0, session_id: 'mock', event_type, author, content, created_at: '', metadata: null });
@@ -219,7 +231,9 @@ async function orchestratorNode(state: typeof AuraStateSchema.State) {
   // Synthesis is ONLY allowed to win when:
   //   a) It's a genuine greeting/identity question (conversational fallback), OR
   //   b) A specialist has already produced output AND no specialist has a live bid
-  //      above threshold (i.e., it acts as a final formatter, never a competitor).
+  //      above threshold (i.e., it acts as a final formatter, never a competitor), OR
+  //   c) No specialist agent bid at all — conversational fallback so the user
+  //      gets a response instead of "Workflow ended without generating a response."
   const synthIdx = bids.findIndex(b => b.agentName === 'synthesis_agent');
   if (synthIdx !== -1) {
     const synthBid = bids[synthIdx];
@@ -244,13 +258,18 @@ async function orchestratorNode(state: typeof AuraStateSchema.State) {
     const allowMode1 = synthBid.confidence >= 0.85 && specialistOutputExists && !specialistBiddingNow;
     // Allow Mode 2 (greeting) only for genuine greetings
     const allowMode2 = synthBid.confidence < 0.85 && isSynthesisGreeting(lastUserMsg);
-    // Allow Mode 3 (Brain Dump bypass)
+    // Allow Mode 3 (conversational fallback) when no specialist agent is bidding at all
+    const noSpecialistBidding = !bids.some(
+      b => b.agentName !== 'synthesis_agent' && b.confidence >= WINNER_CONFIDENCE_THRESHOLD
+    );
+    const allowMode3 = synthBid.confidence < 0.85 && noSpecialistBidding && !specialistOutputExists;
+    // Allow Mode 4 (Brain Dump bypass)
     const isBrainDump = lastUserMsg.includes('[BRAIN DUMP MODE]');
     
     if (isBrainDump) {
       bids[synthIdx] = { ...synthBid, confidence: 0.95, proposedAction: 'Decompose vague goal into structured checklist' };
       console.log('[Graph] Brain dump bypass - routing to synthesis agent');
-    } else if (!allowMode1 && !allowMode2) {
+    } else if (!allowMode1 && !allowMode2 && !allowMode3) {
       bids[synthIdx] = { ...synthBid, confidence: 0 };
       console.log('[Graph] Synthesis guard activated - blocking synthesis agent');
     }
@@ -420,28 +439,20 @@ async function specialistNode(state: typeof AuraStateSchema.State) {
     if (err instanceof VetoApprovalNeededError && state.sessionId) {
       console.log(`[Graph] ⚠️ Veto approval needed for action:`, err.action.toolName);
       
-      // Call LangGraph's interrupt() to pause the workflow
-      // This will return control to the client with the approval request
-      const interruptValue = interrupt({
+      // Pause the graph via LangGraph interrupt.
+      // The client receives the approval request over SSE/WebSocket.
+      // When approved/modified, the graph is resumed with Command({ resume: ... }).
+      // On re-execution, VetoManager will find the action in approvedActions
+      // or approvedOverrides and allow the tool to proceed.
+      interrupt({
         type: 'approval_required',
         action: err.action,
         message: `Action "${err.action.toolName}" requires approval`,
         sessionId: state.sessionId,
       });
       
-      console.log(`[Graph] Workflow resumed after interrupt with:`, interruptValue);
-      
-      // When resumed, interruptValue will contain the approved tool arguments
-      // We need to re-execute the tool with the approved args
-      if (interruptValue && typeof interruptValue === 'object') {
-        const approvedArgs = (interruptValue as any).approvedArgs || (interruptValue as any).resume;
-        if (approvedArgs) {
-          console.log(`[Graph] Re-executing tool with approved args:`, approvedArgs);
-          // The tool registry should handle the re-execution
-          // For now, just log and continue
-        }
-      }
-      
+      // interrupt() throws GraphInterrupt; this line is only reachable in
+      // test environments or if interrupt() is mocked to return.
       return {
         taskWorkspace: state.taskWorkspace,
         errorCount: 0

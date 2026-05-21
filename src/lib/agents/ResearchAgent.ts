@@ -21,6 +21,9 @@ const RESEARCH_RE =
 export class ResearchAgent extends BaseAgent {
   readonly name = 'research_agent' as const;
 
+  /** Allow up to 10 ReAct iterations for multi-step research workflows. */
+  protected maxIterations = 10;
+
   private getHealthyModel(): string | undefined {
     return peekFallbackChain('long_context').find(m => this.isProviderHealthy(m));
   }

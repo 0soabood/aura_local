@@ -12,7 +12,7 @@ import { resolveModel } from '../ModelConfig.server';
 import { buildCodePrompt } from '../prompts/AgentWiring';
 
 const CODE_RE =
-  /\b(code|function|class|implement|debug|refactor|build|api|endpoint|script|bug|fix|parse|regex|sql|query|algorithm|test|deploy|lint|type|interface|module|file|files|folder|folders|directory|directories|path|paths|read)\b/i;
+  /\b(code|function|class|implement|debug|refactor|build|api|endpoint|script|bug|fix|parse|regex|sql|query|algorithm|test|deploy|lint|type|interface|module|file|files|folder|folders|directory|directories|path|paths|read|one-liner|snippet|loop|method|routine|procedure|lambda|closure|generator|decorator|constructor|getter|setter|callback|promise|async|await|serialize|deserialize|validate|transform|flatten|nested|recursion|iterate|loop through|for each)\b/i;
 
 // Matches error messages that indicate a hallucinated/non-existent file path.
 // Covers: ENOENT from fs, and the structured errors returned by executeContextTool.

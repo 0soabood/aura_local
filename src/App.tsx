@@ -19,10 +19,36 @@ class RootErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundary
   render() {
     if (this.state.hasError) {
       return (
-        <div className="page" style={{ justifyContent: 'center', alignItems: 'center' }}>
+        <div style={{
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          height: '100vh',
+          backgroundColor: '#0a0a14',
+          color: '#e2e8f0',
+          fontFamily: "'JetBrains Mono', monospace",
+        }}>
           <div style={{ textAlign: 'center', padding: 48 }}>
-            <span className="tag danger" style={{ marginBottom: 12, display: 'inline-block' }}>CONSOLE CRASHED</span>
-            <p className="mono" style={{ fontSize: 11, color: 'var(--text-2)', maxWidth: 480, lineHeight: 1.6 }}>
+            <span style={{
+              display: 'inline-block',
+              padding: '0.25rem 0.75rem',
+              borderRadius: '4px',
+              backgroundColor: 'rgba(244, 63, 94, 0.15)',
+              color: '#f43f5e',
+              fontSize: '0.7rem',
+              fontWeight: 600,
+              marginBottom: '12px',
+              border: '1px solid rgba(244, 63, 94, 0.3)',
+            }}>
+              CONSOLE CRASHED
+            </span>
+            <p style={{
+              fontSize: '0.7rem',
+              color: '#94a3b8',
+              maxWidth: 480,
+              lineHeight: 1.6,
+              margin: 0,
+            }}>
               {this.state.message}
             </p>
           </div>

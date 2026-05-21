@@ -1,5 +1,6 @@
 import { callProvider, CallerMessage, CallerResult, ProviderFormat } from './UnifiedCaller';
 import { ModelConfig, ProviderConfig } from './ProviderRegistry';
+import { resolveKey } from './ByokStore';
 
 /**
  * OpenRouter Provider - Dynamic model discovery
@@ -182,7 +183,7 @@ function getFallbackModels(): ModelConfig[] {
  * Create a dynamic ProviderConfig for OpenRouter with live model fetching
  */
 export async function createOpenRouterProvider(): Promise<ProviderConfig> {
-  const apiKey = process.env.OPENROUTER_API_KEY || '';
+  const apiKey = resolveKey('openrouter', 'OPENROUTER_API_KEY');
   const defaultModel = 'meta-llama/llama-3.3-70b-instruct:free';
 
   // Fetch models dynamically

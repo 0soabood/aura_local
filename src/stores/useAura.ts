@@ -10,14 +10,32 @@ export const useSetCurrentView = () => useAuraStore(state => state.setCurrentVie
 
 // Session hooks
 export const useSessions = () => useAuraStore(state => state.sessions);
+export const useActiveSession = () => useAuraStore(state => state.activeSession);
 export const useSessionsLoading = () => useAuraStore(state => state.sessionsLoading);
 export const useFetchSessions = () => useAuraStore(state => state.fetchSessions);
 export const useCreateSession = () => useAuraStore(state => state.createSession);
+export const useSelectSession = () => useAuraStore(state => state.selectSession);
 
 export const useSessionById = (id: string) =>
   useAuraStore(state => state.sessions.find(s => s.id === id));
 
 export const useSessionCount = () => useAuraStore(state => state.sessions.length);
+
+// Chat / Orchestration hooks
+export const useMessages = () => useAuraStore(state => state.messages);
+export const useIsOrchestrating = () => useAuraStore(state => state.isOrchestrating);
+export const useActiveAgent = () => useAuraStore(state => state.activeAgent);
+export const useAgentBids = () => useAuraStore(state => state.agentBids);
+export const useAgentEvents = () => useAuraStore(state => state.agentEvents);
+export const useStreamResponse = () => useAuraStore(state => state.streamResponse);
+export const usePendingMessages = () => useAuraStore(state => state.pendingMessages);
+export const useSendMessage = () => useAuraStore(state => state.sendMessage);
+export const useClearChat = () => useAuraStore(state => state.clearChat);
+export const useAddMessage = () => useAuraStore(state => state.addMessage);
+export const useSetAgentBids = () => useAuraStore(state => state.setAgentBids);
+export const useSetActiveAgent = () => useAuraStore(state => state.setActiveAgent);
+export const useSetOrchestrating = () => useAuraStore(state => state.setOrchestrating);
+export const useClearAgentEvents = () => useAuraStore(state => state.clearAgentEvents);
 
 // Stats hooks
 export const useStats = () => useAuraStore(state => state.stats);
@@ -32,16 +50,16 @@ export const useFetchRoadmapItems = () => useAuraStore(state => state.fetchRoadm
 export const useRoadmapByStatus = (status: string) =>
   useAuraStore(state => state.roadmapItems.filter(item => item.status === status));
 
-export const useRoadmapStats = () => useMemo(() => {
+export const useRoadmapStats = () => {
   const items = useAuraStore(state => state.roadmapItems);
-  return {
+  return useMemo(() => ({
     total: items.length,
     done: items.filter(i => i.status === 'done').length,
     inProgress: items.filter(i => i.status === 'in_progress').length,
     backlog: items.filter(i => i.status === 'backlog').length,
     avgRoi: items.reduce((sum, i) => sum + i.roi_score, 0) / (items.length || 1),
-  };
-}, [useAuraStore(state => state.roadmapItems)]);
+  }), [items]);
+};
 
 // Logs hooks
 export const useLogs = () => useAuraStore(state => state.logs);
