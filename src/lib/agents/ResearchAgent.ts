@@ -63,9 +63,11 @@ export class ResearchAgent extends BaseAgent {
   }
 
   private buildResearchToolRegistry(): ToolRegistry {
-    const reg = this.toolRegistry ?? new ToolRegistry();
-    if (!reg.has('read_file'))      reg.register(readFileDef,      readFileFn);
-    if (!reg.has('list_directory')) reg.register(listDirectoryDef, listDirectoryFn);
+    // Create a fresh, scoped registry so the LLM only sees tools this agent
+    // should actually use — prevents calling write_file, run_command, etc.
+    const reg = new ToolRegistry();
+    reg.register(readFileDef,      readFileFn);
+    reg.register(listDirectoryDef, listDirectoryFn);
     return reg;
   }
 

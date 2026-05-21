@@ -27,10 +27,16 @@ import {
 import { compiledGraph } from './graph/workflow';
 import { HumanMessage, AIMessage } from '@langchain/core/messages';
 import { broadcastEvent } from './debug';
+import { VetoManager } from './veto/VetoManager';
+import { DEFAULT_VETO_CONFIG } from './veto/types';
 
 const MAX_LOOPS = 6;
 
 const WINNER_CONFIDENCE_THRESHOLD = 0.30;
+
+/** Timeout (ms) for a single agent execute() call before the orchestrator
+ *  aborts and logs an execution_error event so the next loop can react. */
+const EXECUTE_TIMEOUT_MS = 180_000;
 
 // Pure greeting / meta-identity phrases. Synthesis is allowed to win
 // conversationally only when the input matches one of these AND the input is
@@ -97,11 +103,12 @@ function hasDomainWords(text: string): boolean {
 export class ReactiveOrchestrator {
   private readonly agents: ReactiveAgent[];
   private readonly registry: ProviderRegistry;
+  private readonly toolRegistry: ToolRegistry;
 
   constructor() {
     this.registry = getSharedRegistry();
 
-    const toolRegistry = new ToolRegistry()
+    this.toolRegistry = new ToolRegistry()
       .register(getFileSkeletonDef, getFileSkeletonFn)
       .register(searchCodebaseDef,  searchCodebaseFn)
       .register(readFileDef,        readFileFn)
@@ -112,10 +119,10 @@ export class ReactiveOrchestrator {
       .register(runCommandDef,      runCommandFn);
 
     this.agents = [
-      new ResearchAgent(this.registry, toolRegistry),
-      new CodeAgent(this.registry, toolRegistry),
-      new SynthesisAgent(this.registry, toolRegistry),
-      new BureaucracyAgent(this.registry, toolRegistry),
+      new ResearchAgent(this.registry, this.toolRegistry),
+      new CodeAgent(this.registry, this.toolRegistry),
+      new SynthesisAgent(this.registry, this.toolRegistry),
+      new BureaucracyAgent(this.registry, this.toolRegistry),
     ];
   }
 
@@ -137,6 +144,13 @@ export class ReactiveOrchestrator {
 
     // Seed the ledger with the user's message.
     this.appendAndBroadcast(sessionId, 'user_message', 'user', message);
+
+    // Create a per-session VetoManager for human-in-the-loop tool approvals.
+    // The VetoManager broadcasts approval_required events over SSE which the
+    // frontend's ApprovalModal listens for. Tools that require approval will
+    // block until approved/rejected via the /api/veto/:actionId endpoints.
+    const vetoManager = new VetoManager(sessionId, DEFAULT_VETO_CONFIG);
+    this.toolRegistry.setVetoManager(vetoManager);
 
     try { task.onProgress?.('status', { message: 'Orchestrator started...' }); } catch { /* ignore callback errors */ }
 
@@ -319,7 +333,20 @@ export class ReactiveOrchestrator {
       try { task.onProgress?.('agent_update', { agent: winner.agentName, action: winner.proposedAction }); } catch { /* ignore callback errors */ }
 
       try {
-        let output = await winningAgent.execute(events, winner);
+        // Run agent execute with a timeout guard to prevent hung providers
+        // from blocking the orchestration loop indefinitely.
+        let output = await Promise.race<AgentOutput>([
+          winningAgent.execute(events, winner),
+          new Promise<never>((_, reject) => {
+            const timer = setTimeout(() => {
+              reject(new Error(
+                `Agent ${winner.agentName} execution timed out after ${(EXECUTE_TIMEOUT_MS / 1000).toFixed(0)}s`
+              ));
+            }, EXECUTE_TIMEOUT_MS);
+            // Allow the promise to be GC'd if execute completes first
+            // (the timer remains alive but won't fire since resolve won)
+          }),
+        ]);
 
         // If synthesis_agent was rate-limited by its primary provider, retry
         // across all available providers (load-sorted) with zero delay.

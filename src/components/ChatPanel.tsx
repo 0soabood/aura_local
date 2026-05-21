@@ -1,8 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { useMessages, useSendMessage, useIsOrchestrating, useActiveAgent, useAgentBids, useAgentEvents, useSelectedModel, useEnergyMode, usePendingMessages, useActiveSession } from '../stores/useAura';
+import { useMessages, useSendMessage, useIsOrchestrating, useActiveAgent, useAgentBids, useAgentEvents, useEnergyMode, usePendingMessages, useActiveSession } from '../stores/useAura';
 import { useAuraStore, ChatMessage } from '../stores/auraStore';
+import { useClearChat } from '../stores/useAura';
 import { FileLink } from './FileLink';
 import { ToolCallCard } from './ToolCallCard';
+import { MarkdownRenderer } from './MarkdownRenderer';
+import { showToast } from './ToastContainer';
+import { CommandPalette } from './CommandPalette';
+import type { Command } from './CommandPalette';
+import { ModelSelector } from './ModelSelector';
 
 const AGENT_COLORS: Record<string, string> = {
   research_agent: '#22d3ee',
@@ -36,10 +42,12 @@ export const ChatPanel: React.FC = () => {
   const activeAgent = useActiveAgent();
   const agentBids = useAgentBids();
   const agentEvents = useAgentEvents();
-  const selectedModel = useSelectedModel();
   const energyMode = useEnergyMode();
   const pendingMessages = usePendingMessages();
+  const clearChat = useClearChat();
   const [input, setInput] = useState('');
+  const [showCommands, setShowCommands] = useState(false);
+  const [commandQuery, setCommandQuery] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -131,9 +139,41 @@ export const ChatPanel: React.FC = () => {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Let the command palette handle navigation keys when it's open
+    if (showCommands && (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Escape')) {
+      // The CommandPalette's document-level listener handles these
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSubmit(e);
+    }
+  };
+
+  const handleCommandSelect = (cmd: Command) => {
+    setShowCommands(false);
+    if (cmd.action === 'clear') {
+      clearChat();
+      showToast('Conversation cleared', 'success', 2000);
+      return;
+    }
+    // For all other commands, auto-fill the input with the prefix
+    setInput(cmd.prefix);
+    inputRef.current?.focus();
+  };
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const val = e.target.value;
+    setInput(val);
+
+    // Show command palette when input starts with /
+    if (val.startsWith('/')) {
+      const query = val.slice(1); // everything after /
+      setCommandQuery(query);
+      setShowCommands(true);
+    } else {
+      setShowCommands(false);
+      setCommandQuery('');
     }
   };
 
@@ -151,7 +191,7 @@ export const ChatPanel: React.FC = () => {
   return (
     <div className="flex flex-col h-full min-h-0">
       {/* ── Composer Header ── */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-white/[0.04] shrink-0">
+      <div className="flex items-center justify-between px-4 py-2 border-b border-white/[0.04] shrink-0 select-none">
         <div className="flex items-center gap-2">
           <span className="text-[10px] font-mono uppercase tracking-widest text-white/30">Orchestrate</span>
           {isOrchestrating && activeAgent && (
@@ -229,14 +269,27 @@ export const ChatPanel: React.FC = () => {
               const isError = msg.role === 'error';
               const agentColor = msg.agent ? AGENT_COLORS[msg.agent] : undefined;
 
+              // Try to parse escalation JSON for reason + actionable fields
+              let escalationReason = '';
+              let escalationActionable = '';
+              if (isError) {
+                try {
+                  const parsed = JSON.parse(msg.content);
+                  escalationReason = parsed.reason || msg.content;
+                  escalationActionable = parsed.actionable || '';
+                } catch {
+                  escalationReason = msg.content;
+                }
+              }
+
               return (
-                <div key={msg.id} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+                <div key={msg.id} className={`flex ${isUser ? 'justify-end' : 'justify-start'} group`}>
                   <div
-                    className={`max-w-[90%] rounded-lg px-3.5 py-2.5 text-sm ${
+                    className={`${isUser ? 'max-w-[85%]' : isError ? 'max-w-[95%]' : 'max-w-[90%]'} rounded-lg px-3.5 py-2.5 text-sm ${
                       isUser
                         ? 'bg-indigo-500/15 border border-indigo-500/25 text-white'
                         : isError
-                        ? 'bg-rose-500/[0.08] border border-rose-500/20 text-rose-300'
+                        ? 'bg-transparent border-0 text-white/80'
                         : 'bg-white/[0.02] border border-white/[0.04] text-white/80'
                     }`}
                   >
@@ -248,8 +301,67 @@ export const ChatPanel: React.FC = () => {
                         </span>
                       </div>
                     )}
-                    <div className="whitespace-pre-wrap leading-relaxed"><FileLink content={msg.content} /></div>
-                    <div className="text-[9px] text-white/15 mt-1.5 font-mono">{formatTime(msg.timestamp)}</div>
+                    {/* Render error/escalation as a prominent banner, not a tiny bubble */}
+                    {isError ? (
+                      <div className="w-full max-w-[95%]">
+                        {/* Escalation banner */}
+                        <div className="rounded-lg border border-amber-500/25 bg-amber-500/[0.06] px-4 py-3 text-sm">
+                          <div className="flex items-start gap-2.5">
+                            <span className="text-lg mt-0.5 shrink-0">⚠️</span>
+                            <div className="min-w-0 space-y-1.5">
+                              <p className="text-amber-200 font-medium text-xs uppercase tracking-wider">
+                                {escalationReason.toLowerCase().includes('timeout')
+                                  ? '⏱ Model Timeout — Fallback Attempted'
+                                  : escalationReason.toLowerCase().includes('quota') || escalationReason.toLowerCase().includes('rate limit')
+                                    ? '📊 API Quota Exhausted'
+                                    : '⚠️ Processing Error'}
+                              </p>
+                              <p className="text-amber-100/80 leading-relaxed whitespace-pre-wrap">
+                                {escalationReason}
+                              </p>
+                              {escalationActionable && (
+                                <div className="mt-2 flex items-start gap-2 rounded bg-white/[0.03] border border-white/[0.06] px-3 py-2">
+                                  <span className="text-amber-300 text-xs mt-0.5 shrink-0">💡</span>
+                                  <p className="text-amber-100/60 text-xs leading-relaxed">
+                                    {escalationActionable}
+                                  </p>
+                                </div>
+                              )}
+                              <div className="flex items-center gap-2 mt-2">
+                                <button
+                                  onClick={() => {
+                                    // Auto-send a concise retry prompt using gathered data
+                                    const retryMsg = 'Write a concise response using only the information gathered so far. Summarize what was found.';
+                                    setInput(retryMsg);
+                                    setTimeout(() => sendMessage(retryMsg), 50);
+                                  }}
+                                  className="px-2.5 py-1 rounded-md text-[10px] font-mono font-medium bg-white/[0.04] border border-white/[0.08] text-white/50 hover:text-white/80 hover:border-indigo-500/30 hover:bg-indigo-500/10 transition-all"
+                                >
+                                  🔄 Retry with gathered data
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ) : isUser ? (
+                      <div className="whitespace-pre-wrap leading-relaxed"><FileLink content={msg.content} /></div>
+                    ) : (
+                      <MarkdownRenderer content={msg.content} />
+                    )}
+                    <div className="flex items-center gap-2 mt-1.5">
+                      <span className="text-[9px] text-white/15 font-mono">{formatTime(msg.timestamp)}</span>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(msg.content);
+                          showToast('Copied to clipboard', 'success', 2000);
+                        }}
+                        className="text-[9px] font-mono text-white/15 hover:text-white/40 transition-colors opacity-0 group-hover:opacity-100"
+                        title="Copy message"
+                      >
+                        📋 copy
+                      </button>
+                    </div>
                   </div>
                 </div>
               );
@@ -284,17 +396,17 @@ export const ChatPanel: React.FC = () => {
       </div>
 
       {/* ── Input Area ── */}
-      <div className="shrink-0 border-t border-white/[0.04] bg-[#0a0a14]">
-        {/* Context bar */}
-        <div className="flex items-center gap-2 px-4 py-1.5">
-          {selectedModel !== 'auto' && (
-            <span className="text-[9px] font-mono text-indigo-400/40">
-              {selectedModel.split('/').pop()?.slice(0, 16)}
-            </span>
-          )}
-          {selectedModel === 'auto' && (
-            <span className="text-[9px] font-mono text-white/15">auto-routing</span>
-          )}
+      <div className="shrink-0 border-t border-white/[0.04] bg-[#0a0a14] relative">
+        {/* Command Palette — positioned above the input */}
+        <CommandPalette
+          query={commandQuery}
+          visible={showCommands}
+          onSelect={handleCommandSelect}
+          onClose={() => setShowCommands(false)}
+        />
+        {/* Context bar — select-none to keep it chrome-like */}
+        <div className="flex items-center gap-2 px-4 py-1.5 select-none">
+          <ModelSelector />
           <span className="text-[9px] text-white/10">·</span>
           <span className="text-[9px] font-mono text-white/15">
             {energyMode === 'low' ? '⚡ low energy' : '🔥 high energy'}
@@ -306,7 +418,7 @@ export const ChatPanel: React.FC = () => {
             <textarea
               ref={inputRef}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={handleInputChange}
               onKeyDown={handleKeyDown}
               placeholder={
                 pendingMessages.length > 0

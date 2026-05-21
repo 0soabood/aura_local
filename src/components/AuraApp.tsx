@@ -6,6 +6,7 @@ import { SessionsList } from './SessionsList';
 import { SettingsPanel } from './SettingsPanel';
 import { ThinkingTrace } from './ThinkingTrace';
 import { ApprovalModal } from './ApprovalModal';
+import { ToastContainer } from './ToastContainer';
 import {
   useIsOrchestrating,
   useActiveAgent,
@@ -51,11 +52,11 @@ export const AuraApp: React.FC = () => {
   ];
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-[#0a0a14] text-white overflow-hidden font-sans select-none">
+    <div className="h-screen w-screen flex flex-col bg-[#0a0a14] text-white overflow-hidden font-sans">
       {/* ════════════════════════════════════════ */}
       {/* TOP BAR                                  */}
       {/* ════════════════════════════════════════ */}
-      <header className="flex items-center justify-between px-5 py-2.5 bg-[#0d0d1a]/90 backdrop-blur-xl border-b border-white/5 shrink-0">
+      <header className="flex items-center justify-between px-5 py-2.5 bg-[#0d0d1a]/90 backdrop-blur-xl border-b border-white/5 shrink-0 select-none">
         {/* Left: Logo + title */}
         <div className="flex items-center gap-3">
           <button
@@ -103,7 +104,7 @@ export const AuraApp: React.FC = () => {
       <div className="flex-1 flex overflow-hidden">
 
         {/* ── LEFT RAIL (icon nav) ── */}
-        <nav className="w-[52px] flex flex-col items-center py-3 gap-1 bg-[#0d0d1a] border-r border-white/5 shrink-0">
+        <nav className="w-[52px] flex flex-col items-center py-3 gap-1 bg-[#0d0d1a] border-r border-white/5 shrink-0 select-none">
           {/* Logo — clickable to reset */}
           <button
             onClick={() => { setActiveView('compose'); setShowRightPanel(true); }}
@@ -209,7 +210,7 @@ export const AuraApp: React.FC = () => {
       {/* ════════════════════════════════════════ */}
       {/* BOTTOM STATUS BAR                        */}
       {/* ════════════════════════════════════════ */}
-      <footer className="flex items-center justify-between px-5 py-1.5 bg-[#0d0d1a]/90 backdrop-blur-xl border-t border-white/5 shrink-0">
+      <footer className="flex items-center justify-between px-5 py-1.5 bg-[#0d0d1a]/90 backdrop-blur-xl border-t border-white/5 shrink-0 select-none">
         <div className="flex items-center gap-3 text-[10px] font-mono text-white/20">
           <span className="text-indigo-400/50">AURA</span>
           <span className="text-white/10">·</span>
@@ -226,6 +227,8 @@ export const AuraApp: React.FC = () => {
       </footer>
       {/* Approval modal overlay */}
       {pendingApproval && <ApprovalModal action={pendingApproval} />}
+      {/* Toast notifications */}
+      <ToastContainer />
     </div>
   );
 };

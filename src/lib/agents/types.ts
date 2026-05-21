@@ -5,6 +5,7 @@ import { assembleSystemPrompt } from '../supervisors/prompts';
 import type { ToolDefinition, ReActResult } from '../tools/types';
 import type { ToolRegistry } from '../tools/registry';
 import { broadcastEvent } from '../debug';
+import { getErrorLogger, ErrorLogger } from '../utils/ErrorLogger';
 
 export type { AgentBid, AgentOutput };
 
@@ -47,6 +48,22 @@ export abstract class BaseAgent implements ReactiveAgent {
     protected readonly registry: ProviderRegistry,
     protected readonly toolRegistry?: ToolRegistry,
   ) {}
+
+  /**
+   * Structured logger with per-agent context.  Subclasses call
+   *   this.log.error('message', { key: val }, sessionId);
+   * without needing to import anything.
+   *
+   * Lazy getter because `this.name` (abstract) isn't available during
+   * BaseAgent construction; the underlying getErrorLogger() already
+   * caches instances by agent name, so this is effectively a singleton
+   * per agent class.
+   */
+  protected get log(): ErrorLogger {
+    if (!this._log) this._log = getErrorLogger(this.name);
+    return this._log;
+  }
+  private _log: ErrorLogger | undefined;
 
   abstract evaluate(events: BlackboardEvent[]): AgentBid;
   abstract execute(events: BlackboardEvent[], bid: AgentBid): Promise<AgentOutput>;
@@ -183,7 +200,11 @@ export abstract class BaseAgent implements ReactiveAgent {
     let totalLatency   = 0;
     let lastModel      = model;
 
+    let lastStep = 0;
+    let didBreak = false;
+
     for (let step = 0; step < this.maxIterations; step++) {
+      lastStep = step;
       broadcastEvent(sessionId, { event_type: 'react_think', author: this.name, content: `Reasoning step ${step + 1}/${this.maxIterations} with ${model}...` });
 
       let result = await this.registry.call(model, '', {
@@ -192,21 +213,57 @@ export abstract class BaseAgent implements ReactiveAgent {
         tools:       toolDefs.length ? toolDefs : undefined,
       });
 
-      if (result.rateLimited) {
-        // Primary provider can't handle this request (rate limit or token size).
-        // Try all other available providers in load-sorted order.
-        const fallback = await this.registry.callWithFallback('', {
-          temperature: opts.temperature,
-          messages:    localMessages,
-          tools:       toolDefs.length ? toolDefs : undefined,
+      // ── Per-step provider resilience ─────────────────────────────────────
+      // If the primary provider rate-limits or returns empty/very weak content,
+      // automatically try the fallback chain before giving up on this step.
+      const stepFailed = result.rateLimited || !result.text || result.text.trim().length < 3;
+      if (stepFailed) {
+        const primaryErr = result.errorMessage ?? (result.text ? '(empty response)' : 'no content');
+        this.log.warn(
+          `Primary provider ${model} failed: ${primaryErr}. Trying fallback chain...`,
+          { step: step + 1, error: primaryErr },
+          sessionId,
+        );
+        broadcastEvent(sessionId, {
+          event_type: 'react_observe',
+          author:     this.name,
+          content:    `Provider ${model.split(':')[0]} returned ${primaryErr}. Retrying with different model...`,
         });
-        if (!fallback.rateLimited && fallback.text) {
-          result = fallback;
-        } else {
-          throw new Error(
-            `[${model}] token/rate limit exceeded and all fallbacks failed: ` +
-            (result.errorMessage ?? fallback.errorMessage ?? 'no providers available'),
+
+        try {
+          const fallback = await this.registry.callWithFallback('', {
+            temperature: opts.temperature,
+            messages:    localMessages,
+            tools:       toolDefs.length ? toolDefs : undefined,
+          });
+          if (fallback.text && fallback.text.trim().length >= 3) {
+            this.log.info(
+              `Step ${step + 1} fallback succeeded: ${fallback.provider}:${fallback.model ?? 'default'}`,
+              { step: step + 1 },
+              sessionId,
+            );
+            result = fallback;
+          } else {
+            throw new Error(`Fallback returned empty/weak content from ${fallback.provider}`);
+          }
+        } catch (fbErr: any) {
+          // All providers failed for this step.  Instead of hard-throwing and
+          // killing the entire ReAct loop, degrade gracefully: if we already
+          // have tool results from earlier steps, force-exit the loop early
+          // so the max-iterations fallback can produce a useful summary.
+          this.log.error(
+            `Step ${step + 1} ALL providers failed: ${fbErr.message}`,
+            { step: step + 1, error: fbErr.message },
+            sessionId,
           );
+          broadcastEvent(sessionId, {
+            event_type: 'react_observe',
+            author:     this.name,
+            content:    `All providers failed at step ${step + 1}. Will synthesize from gathered data.`,
+          });
+          // Break out so the max-iterations path (rich fallback) runs
+          didBreak = true;
+          break;
         }
       }
 
@@ -293,51 +350,171 @@ export abstract class BaseAgent implements ReactiveAgent {
       }
     }
 
-    console.log(`[ReAct] maxIterations (${this.maxIterations}) hit for ${this.name}. localMessages count: ${localMessages.length}. Forcing final answer...`);
-    broadcastEvent(sessionId, { event_type: 'react_observe', author: this.name, content: `Max reasoning steps reached. Forcing final answer...` });
+    // ── Max iterations / early-exit fallback ─────────────────────────────
+    // We reach here either because maxIterations was hit, OR because all
+    // providers failed during a step and we broke out early.  In both cases
+    // we already have tool results accumulated in localMessages.  We now
+    // try one or more forced-final-answer prompts; if every prompt fails,
+    // we fall through to a rich structured summary of gathered data.
+    const exitReason = (!didBreak && lastStep === this.maxIterations - 1) ? 'max_iterations' : 'provider_failure';
+    this.log.info(
+      `${exitReason} for ${this.name} at step ${lastStep + 1}. localMessages=${localMessages.length}. Forcing final answer...`,
+      { exitReason, lastStep: lastStep + 1, messageCount: localMessages.length },
+      sessionId,
+    );
+    broadcastEvent(sessionId, {
+      event_type: 'react_observe',
+      author:     this.name,
+      content:    `Reasoning ended (${exitReason.replace('_', ' ')}). Generating final answer...`,
+    });
 
-    // Force one more LLM call without tools to get a final answer
-    try {
-      const finalResult = await this.registry.call(lastModel, 'Force final answer after max ReAct steps', {
-        temperature: opts.temperature ?? 0.3,
-        messages: [...localMessages, {
-          role: 'user',
-          content: 'You have reached the maximum number of reasoning steps. Provide your final answer now based on all the information gathered. Do NOT call any more tools. Give the best answer you can.'
-        }],
-      });
+    // A "useful" response has at least 30 chars AND looks like a complete
+    // thought (sentence terminator, markdown header, or list item).
+    const isUseful = (text: string): boolean => {
+      const t = text.trim();
+      if (t.length < 30) return false;
+      return /[.!?:;]\s+/.test(t) || /^#{1,3}\s+/.test(t) || t.includes('\n- ') || t.includes('\n1. ');
+    };
 
-      // Validate the response: must be a non-empty string with actual content
-      const responseText = (finalResult.text || '').trim();
-      if (responseText && responseText.length > 5) {
-        totalTokensIn  += finalResult.tokensIn;
-        totalTokensOut += finalResult.tokensOut;
-        totalLatency   += finalResult.latencyMs;
+    // Try up to 3 prompts: standard → more explicit → any available model
+    const forcedPrompts = [
+      'You have reached the maximum number of reasoning steps. Provide your final answer now based on all the information gathered. Do NOT call any more tools. Give the best answer you can.',
+      "Based on all tool results shown above, write a concise but complete answer to the user's original question. Include key facts, numbers, and conclusions. Do NOT mention that you hit a step limit.",
+      'Summarize the findings from the tool results in the conversation above. Be specific — include names, numbers, file paths, or any concrete data discovered. Answer directly.',
+    ];
 
-        broadcastEvent(sessionId, { event_type: 'react_observe', author: this.name, content: `Forced final answer generated (${responseText.length} chars).` });
-        return {
-          content:    responseText,
-          model:      finalResult.model || lastModel,
-          latencyMs:  totalLatency,
-          tokensIn:   totalTokensIn,
-          tokensOut:  totalTokensOut,
-        };
+    for (let attempt = 0; attempt < forcedPrompts.length; attempt++) {
+      const useFallbackChain = attempt === 2; // last attempt: any provider
+
+      try {
+        const finalResult = useFallbackChain
+          ? await this.registry.callWithFallback('Force final answer after ReAct steps', {
+              temperature: opts.temperature ?? 0.3,
+              messages: [...localMessages, { role: 'user', content: forcedPrompts[attempt] }],
+              // Pass the original model as preferred so the fallback chain
+              // tries the intended provider first (not a random one).
+              preferred: model,
+            })
+          : await this.registry.call(lastModel, 'Force final answer after ReAct steps', {
+              temperature: opts.temperature ?? 0.3,
+              messages: [...localMessages, { role: 'user', content: forcedPrompts[attempt] }],
+            });
+
+        const responseText = (finalResult.text || '').trim();
+        if (isUseful(responseText)) {
+          totalTokensIn  += finalResult.tokensIn ?? 0;
+          totalTokensOut += finalResult.tokensOut ?? 0;
+          totalLatency   += finalResult.latencyMs ?? 0;
+
+          this.log.info(
+            `Forced final answer succeeded on attempt ${attempt + 1} (${responseText.length} chars)`,
+            { attempt: attempt + 1, chars: responseText.length },
+            sessionId,
+          );
+          broadcastEvent(sessionId, {
+            event_type: 'react_observe',
+            author:     this.name,
+            content:    `Final answer generated on attempt ${attempt + 1} (${responseText.length} chars).`,
+          });
+          return {
+            content:    responseText,
+            model:      finalResult.model || lastModel,
+            latencyMs:  totalLatency,
+            tokensIn:   totalTokensIn,
+            tokensOut:  totalTokensOut,
+          };
+        }
+
+        this.log.warn(
+          `Forced attempt ${attempt + 1} returned insufficient content (${responseText.length} chars)`,
+          { attempt: attempt + 1, chars: responseText.length },
+          sessionId,
+        );
+      } catch (err: any) {
+        this.log.error(
+          `Forced attempt ${attempt + 1} failed: ${err.message}`,
+          { attempt: attempt + 1, error: err.message },
+          sessionId,
+        );
       }
-
-      console.warn(`[ReAct] Forced call returned insufficient content: "${responseText.slice(0, 100)}"`);
-    } catch (err: any) {
-      console.error(`[ReAct] Forced final answer call failed:`, err.message);
     }
 
-    // Ultimate fallback: summarize what tools were called
-    const toolNames = localMessages
-      .filter((m: any) => m.role === 'tool')
-      .map((m: any) => m.name)
-      .filter(Boolean);
+    // ── Rich ultimate fallback ───────────────────────────────────────────
+    // Every forced-final-answer attempt failed.  Rather than returning
+    // something useless like "Unable to synthesize", we build a structured
+    // summary from the actual tool results gathered during the loop.
+    const toolMessages = localMessages.filter((m: any) => m.role === 'tool');
+    const toolNames = [...new Set(toolMessages.map((m: any) => m.name).filter(Boolean))];
+
+    // Gather up to 6 tool outputs, up to 400 chars each — enough to be useful
+    // without flooding the user with raw dumps.
+    const gatheredResults = toolMessages
+      .slice(0, 6)
+      .map((m: any, idx: number) => {
+        const name = m.name || `tool-${idx + 1}`;
+        const raw = String(m.content || '');
+        // Trim to first 400 chars but break at a natural boundary if possible
+        let snippet = raw.length > 400
+          ? raw.slice(0, 400).replace(/\s+\S*$/, '') + '...'
+          : raw;
+        // If the tool returned JSON, try to pretty-print the first object
+        if (snippet.startsWith('{') || snippet.startsWith('[')) {
+          try {
+            const parsed = JSON.parse(raw);
+            const summary = JSON.stringify(parsed, null, 2).slice(0, 400);
+            snippet = summary.length > 400 ? summary.slice(0, 400) + '...' : summary;
+          } catch { /* keep raw snippet */ }
+        }
+        return snippet ? `**${name}**\n${snippet}` : null;
+      })
+      .filter(Boolean) as string[];
+
+    const lines: string[] = [];
+
+    // Header — honest but helpful, never apologetic in a useless way
+    lines.push(`The ${this.name.replace('_', ' ')} explored your request across ${lastStep + 1} reasoning step${lastStep !== 0 ? 's' : ''}.`);
+    if (toolNames.length > 0) {
+      lines.push(`It used ${toolNames.length} tool${toolNames.length !== 1 ? 's' : ''} (${toolNames.join(', ')}).`);
+    }
+
+    // Actual findings
+    if (gatheredResults.length > 0) {
+      lines.push('');
+      lines.push('## What was found');
+      lines.push('');
+      lines.push(...gatheredResults);
+    } else {
+      lines.push('');
+      lines.push('No tool results were captured during this run.');
+    }
+
+    // Suggested next steps — always actionable
+    lines.push('');
+    lines.push('## Suggested next steps');
+    if (gatheredResults.length > 0) {
+      lines.push('- The raw data above may contain the answer you need. Ask me to analyze or summarize a specific finding.');
+      lines.push('- If the output is too short, try rephrasing your question with more specific terms.');
+    } else {
+      lines.push('- No data was gathered. This usually means the provider was unavailable or returned empty responses.');
+      lines.push('- Try again in a moment, or check that at least one API key is configured in Settings.');
+    }
+    lines.push(`- If this keeps happening, open Settings → check provider health, or reduce task complexity.`);
+
+    const fallbackText = lines.join('\n');
+
+    this.log.error(
+      `ALL forced-final-answer attempts exhausted for ${this.name}. Returning rich fallback (${fallbackText.length} chars).`,
+      { fallbackChars: fallbackText.length },
+      sessionId,
+    );
+    broadcastEvent(sessionId, {
+      event_type: 'react_observe',
+      author:     this.name,
+      content:    `All synthesis attempts failed. Returning structured summary of gathered data (${fallbackText.length} chars).`,
+    });
 
     return {
-      content:    toolNames.length
-        ? `Research completed using tools: ${toolNames.join(', ')}. Unable to synthesize final answer.`
-        : 'Research completed but no final answer was generated.',
+      content:    fallbackText,
       model:      lastModel,
       latencyMs:  totalLatency,
       tokensIn:   totalTokensIn,

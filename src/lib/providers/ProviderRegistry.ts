@@ -318,7 +318,12 @@ export class ProviderRegistry {
       `${providerId}:${modelId}`,
     );
 
-    return { ...result, provider: providerId, rateLimited: result.rateLimited };
+    // Return the full routing string as `model` so downstream code (ReAct loop,
+    // forced final answer) can pass it back into call() / callWithFallback()
+    // without losing the provider prefix.  This prevents parseRouting from
+    // misidentifying a model slug that contains slashes or colons (e.g.
+    // "openrouter:z-ai/glm-4.5-air:free") as provider "z-ai/glm-4.5-air".
+    return { ...result, model: routing, provider: providerId, rateLimited: result.rateLimited };
   }
 
   // ── Multi-provider call with automatic fallback ───────────────────────────

@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { BlackboardEvent, RoadmapItem, SystemLog, TelemetryMetrics } from '../shared/types';
 import type { VetoAction } from '../lib/veto/types';
+import { showToast } from '../components/ToastContainer';
 
 export type ModelRole = 'daily_driver' | 'long_context' | 'reasoning' | 'agent_orchestrator' | 'vision' | 'translate' | 'compaction' | 'bulk_fast' | 'experimental';
 
@@ -174,6 +175,7 @@ export const useAuraStore = create<AuraState>()(
         // If already orchestrating, queue the message and show a toast
         if (get().isOrchestrating) {
           set((s) => ({ pendingMessages: [...s.pendingMessages, message] }));
+          showToast(`Message queued — will send when current task completes`, 'info', 3000);
           const queuedMsg: ChatMessage = {
             id: crypto.randomUUID(),
             role: 'system',
@@ -291,11 +293,18 @@ export const useAuraStore = create<AuraState>()(
                           set((s) => ({ messages: [...s.messages, synthMsg] }));
                         }
 
-                        if (realEventType === 'agent_error') {
+                        // Handle error events from SSE stream (timeout escalation, etc.)
+                        if (realEventType === 'error' || realEventType === 'agent_error') {
+                          // Try to parse structured JSON content with reason + actionable fields
+                          let displayContent = data.content || 'An error occurred during processing.';
+                          try {
+                            const parsed = JSON.parse(displayContent);
+                            displayContent = parsed.reason || displayContent;
+                          } catch { /* keep raw */ }
                           const errMsg: ChatMessage = {
                             id: crypto.randomUUID(),
                             role: 'error',
-                            content: data.content || 'An error occurred',
+                            content: displayContent,
                             agent: agentName,
                             timestamp: Date.now(),
                           };
@@ -339,6 +348,7 @@ export const useAuraStore = create<AuraState>()(
           }
         } catch (err: any) {
           console.error('Orchestration failed:', err);
+          showToast(`Orchestration failed: ${err.message}`, 'error', 5000);
           const errMsg: ChatMessage = {
             id: crypto.randomUUID(),
             role: 'error',

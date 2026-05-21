@@ -9,6 +9,7 @@ import type { ReActResult } from '../tools/types';
 import { peekFallbackChain } from '../ModelConfig';
 import { resolveModel } from '../ModelConfig.server';
 import { buildSynthesisPrompt } from '../prompts/AgentWiring';
+import { broadcastEvent } from '../debug';
 
 /**
  * SynthesisAgent — backed by Gemini Flash.
@@ -221,7 +222,70 @@ export class SynthesisAgent extends BaseAgent {
     } catch (err: any) {
       // runReactLoop throws when all providers fail or hit rate limits
       const errMsg = err.message ?? String(err);
-      if (errMsg.includes('rate limit') || errMsg.includes('token limit') || errMsg.includes('quota')) {
+      const isTimeout = errMsg.includes('[Timeout]') || errMsg.includes('timed out');
+      const isRateLimit = errMsg.includes('rate limit') || errMsg.includes('token limit') || errMsg.includes('quota');
+
+      if (isTimeout) {
+        // ── Automatic timeout fallback ───────────────────────────────────
+        // Try a fast Groq model before telling the user the task failed.
+        const FALLBACK_FAST = 'groq:qwen/qwen3-32b';
+        this.log.warn(
+          `Primary model ${model} timed out. Trying fast fallback ${FALLBACK_FAST}...`,
+          { primaryModel: model, fallbackModel: FALLBACK_FAST },
+          events[0]?.session_id || 'unknown',
+        );
+        broadcastEvent(events[0]?.session_id || 'unknown', {
+          event_type: 'react_observe',
+          author:     this.name,
+          content:    `⏱ Primary model timed out. Retrying with faster model (Qwen3-32B on Groq)...`,
+        });
+
+        try {
+          if (!this.isProviderHealthy(FALLBACK_FAST)) {
+            throw new Error(`Fast fallback provider not available (no API key for Groq)`);
+          }
+          const fallbackReactResult = await this.runReactLoop(
+            events[0]?.session_id || 'unknown',
+            messages,
+            FALLBACK_FAST,
+            reg.describe(),
+            reg,
+            { temperature: 0.0 },
+          );
+          // Fast fallback succeeded — use its result
+          reactResult = fallbackReactResult;
+          this.log.info(
+            `Fast timeout fallback succeeded with ${FALLBACK_FAST}`,
+            { fallbackModel: FALLBACK_FAST },
+            events[0]?.session_id || 'unknown',
+          );
+        } catch (fallbackErr: any) {
+          // Both primary and fallback failed — escalate with clear info
+          const fbMsg = fallbackErr.message ?? String(fallbackErr);
+          this.log.error(
+            `Fast timeout fallback also failed: ${fbMsg}`,
+            { primaryModel: model, fallbackModel: FALLBACK_FAST, error: fbMsg },
+            events[0]?.session_id || 'unknown',
+          );
+          return {
+            event_type: 'escalation_required',
+            content: JSON.stringify({
+              reason: `Primary model (${model}) timed out. Fast fallback (${FALLBACK_FAST}) also failed: ${fbMsg}`,
+              actionable: 'Switch to a faster model like Groq in Settings, or try again later when the API is less congested.',
+              timeoutInfo: {
+                primaryModel: model,
+                fallbackModel: FALLBACK_FAST,
+              },
+            }),
+            metadata: {
+              model_id:   FALLBACK_FAST,
+              latency_ms: 0,
+              confidence: bid.confidence,
+              rate_limited: false,
+            },
+          };
+        }
+      } else if (isRateLimit) {
         return {
           event_type: 'escalation_required',
           content: JSON.stringify({
@@ -235,9 +299,10 @@ export class SynthesisAgent extends BaseAgent {
             rate_limited: true,
           },
         };
+      } else {
+        // Re-throw so the orchestrator can append an execution_error event
+        throw err;
       }
-      // Re-throw so the orchestrator can append an execution_error event
-      throw err;
     }
 
     const effectiveResult = {
@@ -254,7 +319,11 @@ export class SynthesisAgent extends BaseAgent {
     const hasEchoLoop = /(a sequence of ){5,}/i.test(rawText)
       || /((\b\w+\b)(\s+\2){7,})/i.test(rawText);  // same word repeated 8+ times
     if (rawText && hasEchoLoop) {
-      console.warn(`[Synthesis] Echo loop detected in output, falling back to summary. First 100 chars: "${rawText.slice(0, 100)}"`);
+      this.log.warn(
+        `Echo loop detected in output. First 100 chars: "${rawText.slice(0, 100)}"`,
+        { first100Chars: rawText.slice(0, 100) },
+        events[0]?.session_id || 'unknown',
+      );
       const agentOutputs = currentTurnEvents.filter(e => e.event_type === 'agent_output' || e.event_type === 'code_written');
       const summary = agentOutputs.length
         ? `I processed the following information but encountered a synthesis error. Here is a raw summary of what was found:\n\n${
