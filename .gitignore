@@ -27,3 +27,6 @@ __mocks__/
 # Local env-specific scripts
 start.sh
 hello_world.py
+
+# Vexp (version explorer) cache
+.vexp/

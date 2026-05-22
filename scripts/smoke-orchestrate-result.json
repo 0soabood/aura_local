@@ -1,5 +1,0 @@
-{
-  "step": "fatal",
-  "message": "require is not defined",
-  "stack": "ReferenceError: require is not defined\n    at createApiApp (C:\\Users\\thega\\Documents\\Claude\\Projects\\abood main\\PROJECTS\\Dev\\APPS\\aura_local_sync\\src\\main\\app.ts:886:30)\n    at main (C:\\Users\\thega\\Documents\\Claude\\Projects\\abood main\\PROJECTS\\Dev\\APPS\\aura_local_sync\\scripts\\smoke-orchestrate.cjs:14:15)"
-}
